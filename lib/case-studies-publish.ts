@@ -2,8 +2,53 @@ import { createAdminClient } from '@/lib/supabase/admin';
 import { getCaseStudyPhotos } from '@/lib/case-study-photos';
 import { moveFolderToPublished } from '@/lib/drive/move';
 import { importImageFromUrl } from '@/lib/wix/media';
-import { publishCaseStudy as publishToWix } from '@/lib/wix/cms';
+import { deleteWixItem, publishCaseStudy as publishToWix } from '@/lib/wix/cms';
 import type { CaseStudy } from '@/lib/types';
+
+// Delete the Wix item (if any) and clear all Wix linkage on the case_studies
+// row so the next publish creates a fresh item with a fresh slug. Photo
+// wix_media_url values are cleared too so images get re-imported into Wix
+// Media — keeps things in lockstep with the new item.
+export async function resetWixLink(id: string): Promise<{ deletedItem: boolean }> {
+  const supabase = createAdminClient();
+  const { data, error } = await supabase
+    .from('case_studies')
+    .select('wix_item_id')
+    .eq('id', id)
+    .maybeSingle();
+  if (error) throw new Error(`Failed to load case study: ${error.message}`);
+  if (!data) throw new Error(`Case study ${id} not found`);
+
+  let deletedItem = false;
+  if (data.wix_item_id) {
+    const res = await deleteWixItem(data.wix_item_id);
+    deletedItem = res.deleted;
+  }
+
+  const updates = await supabase
+    .from('case_studies')
+    .update({
+      status: 'draft',
+      wix_item_id: null,
+      wix_url_slug: null,
+      wix_published_url: null,
+      published_at: null,
+      last_error: null,
+    })
+    .eq('id', id);
+  if (updates.error) throw new Error(`Failed to clear Wix linkage: ${updates.error.message}`);
+
+  // Clear wix_media_url on all photos so the next publish re-imports them.
+  const photoUpdate = await supabase
+    .from('case_study_photos')
+    .update({ wix_media_url: null })
+    .eq('case_study_id', id);
+  if (photoUpdate.error) {
+    throw new Error(`Failed to clear photo Wix urls: ${photoUpdate.error.message}`);
+  }
+
+  return { deletedItem };
+}
 
 const REQUIRED_TEXT_FIELDS = [
   'h1_page_title',

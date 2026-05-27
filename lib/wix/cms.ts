@@ -59,6 +59,21 @@ type DataItemResponse = {
   };
 };
 
+// Delete a CMS item by id. 404 is treated as success (already gone) so the
+// caller can call this idempotently when resetting state.
+export async function deleteWixItem(itemId: string): Promise<{ deleted: boolean }> {
+  try {
+    await wix.delete(
+      `https://www.wixapis.com/wix-data/v2/items/${encodeURIComponent(itemId)}?dataCollectionId=${COLLECTION_ID}`,
+    );
+    return { deleted: true };
+  } catch (err) {
+    const status = (err as { statusCode?: number }).statusCode;
+    if (status === 404) return { deleted: false };
+    throw err;
+  }
+}
+
 // Insert a new CMS item, or update if the case study already has a wix_item_id.
 // Returns the Wix item id and the auto-generated URL slug.
 export async function publishCaseStudy(
