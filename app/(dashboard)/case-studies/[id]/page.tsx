@@ -3,6 +3,7 @@ import { notFound } from 'next/navigation';
 import { getCaseStudy } from '@/lib/case-studies';
 import { EditableField } from '@/components/case-studies/EditableField';
 import { RegenerateButton } from '@/components/case-studies/RegenerateButton';
+import { DraftCopyButton } from '@/components/case-studies/DraftCopyButton';
 
 export const dynamic = 'force-dynamic';
 
@@ -122,15 +123,106 @@ export default async function CaseStudyDetailPage({
         </div>
       </section>
 
-      <section className="rounded-lg border border-dashed border-neutral-300 bg-white p-6">
-        <h2 className="text-sm font-semibold uppercase tracking-wider text-neutral-500">
-          Generated copy
-        </h2>
-        <p className="mt-2 text-sm text-neutral-500">
-          AI text generation is the next step. Once wired up, the H1 / Design
-          Highlights / Summary / CTA / SEO meta / Schema fields will appear here
-          for review and editing.
-        </p>
+      <section>
+        <div className="flex items-end justify-between gap-4">
+          <div>
+            <h2 className="text-sm font-semibold uppercase tracking-wider text-neutral-500">
+              Generated copy
+            </h2>
+            <p className="mt-1 text-xs text-neutral-500">
+              Drafted by Claude from the extracted spec, grounded in the
+              voice of existing case studies. Edit any field inline — Wix
+              HTML formatting is preserved.
+            </p>
+          </div>
+          <DraftCopyButton
+            caseStudyId={cs.id}
+            hasDraft={!!cs.h1_introduction_text}
+          />
+        </div>
+
+        {cs.h1_introduction_text ? (
+          <div className="mt-4 space-y-4" key={`copy-${cs.updated_at}`}>
+            <EditableField
+              caseStudyId={cs.id}
+              field="h1_page_title"
+              label="H1 page title"
+              initialValue={cs.h1_page_title}
+            />
+            <EditableField
+              caseStudyId={cs.id}
+              field="h1_introduction_text"
+              label="Introduction (HTML)"
+              initialValue={cs.h1_introduction_text}
+              multiline
+            />
+            <EditableField
+              caseStudyId={cs.id}
+              field="h2_design_highlights_title"
+              label="Design highlights H2"
+              initialValue={cs.h2_design_highlights_title}
+            />
+            <EditableField
+              caseStudyId={cs.id}
+              field="h2_design_highlights_text"
+              label="Design highlights body (HTML)"
+              initialValue={cs.h2_design_highlights_text}
+              multiline
+            />
+            <EditableField
+              caseStudyId={cs.id}
+              field="h2_summary_title"
+              label="Summary H2"
+              initialValue={cs.h2_summary_title}
+            />
+            <EditableField
+              caseStudyId={cs.id}
+              field="h2_summary_text"
+              label="Summary body (HTML)"
+              initialValue={cs.h2_summary_text}
+              multiline
+            />
+            <EditableField
+              caseStudyId={cs.id}
+              field="cta_text"
+              label="CTA (HTML)"
+              initialValue={cs.cta_text}
+              multiline
+            />
+            <div className="grid gap-4 sm:grid-cols-2">
+              <EditableField
+                caseStudyId={cs.id}
+                field="page_meta_title"
+                label="Page meta title"
+                initialValue={cs.page_meta_title}
+              />
+              <EditableField
+                caseStudyId={cs.id}
+                field="page_meta_description"
+                label="Page meta description"
+                initialValue={cs.page_meta_description}
+              />
+              <EditableField
+                caseStudyId={cs.id}
+                field="schema_title"
+                label="Schema title"
+                initialValue={cs.schema_title}
+              />
+              <EditableField
+                caseStudyId={cs.id}
+                field="schema_desc"
+                label="Schema description"
+                initialValue={cs.schema_desc}
+                multiline
+              />
+            </div>
+          </div>
+        ) : (
+          <div className="mt-4 rounded-lg border border-dashed border-neutral-300 bg-white p-8 text-center text-sm text-neutral-500">
+            No copy drafted yet. Click <strong>Draft copy with AI</strong> when
+            you&apos;re happy with the extracted spec above.
+          </div>
+        )}
       </section>
     </div>
   );

@@ -14,6 +14,17 @@ const EDITABLE_FIELDS = [
   'edge_details',
   'fixings',
   'club_types',
+  'h1_page_title',
+  'h1_introduction_text',
+  'h2_design_highlights_title',
+  'h2_design_highlights_text',
+  'h2_summary_title',
+  'h2_summary_text',
+  'cta_text',
+  'page_meta_title',
+  'page_meta_description',
+  'schema_title',
+  'schema_desc',
 ] as const;
 
 type EditableField = (typeof EDITABLE_FIELDS)[number];
@@ -43,7 +54,7 @@ export async function PATCH(req: Request, ctx: RouteContext<'/api/case-studies/[
   }
 
   try {
-    await updateCaseStudyFields(id, updates);
+    await updateCaseStudyFields(id, updates as Parameters<typeof updateCaseStudyFields>[1]);
     return NextResponse.json({ ok: true });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

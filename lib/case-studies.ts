@@ -2,6 +2,7 @@ import { createAdminClient } from '@/lib/supabase/admin';
 import { getBrandBySlug } from '@/lib/brands';
 import { listPendingFolders, type PendingFolder } from '@/lib/drive/folders';
 import { extractFromPendingFolder } from '@/lib/pdf/extract';
+import { draftCaseStudy } from '@/lib/ai/draft';
 import type { CaseStudy } from '@/lib/types';
 
 export type PendingFolderWithStatus = PendingFolder & {
@@ -106,6 +107,46 @@ export async function generateCaseStudyForFolder(driveFolderId: string): Promise
   }
 }
 
+export async function draftCopyForCaseStudy(id: string): Promise<void> {
+  const cs = await getCaseStudy(id);
+  if (!cs) throw new Error(`Case study ${id} not found`);
+
+  const rootId = process.env.HONOURS_BOARDS_DRIVE_ROOT_ID;
+  if (!rootId) throw new Error('HONOURS_BOARDS_DRIVE_ROOT_ID is not set');
+
+  // Re-fetch the Drive folder + PDFs. Acceptable cost for now; if generation
+  // turns out to be a hot path we can stash the spec in the case_studies row
+  // when extract runs.
+  const folders = await listPendingFolders(rootId);
+  const folder = folders.find((f) => f.id === cs.drive_folder_id);
+  if (!folder) {
+    throw new Error(
+      `Drive folder ${cs.drive_folder_id} no longer in 1-Pending — has it been moved?`,
+    );
+  }
+  const spec = await extractFromPendingFolder(folder);
+
+  const supabase = createAdminClient();
+  try {
+    const fields = await draftCaseStudy(spec, {
+      club_types: cs.club_types,
+      customer_name: cs.customer_name,
+    });
+    const { error } = await supabase
+      .from('case_studies')
+      .update({ ...fields, last_error: null })
+      .eq('id', id);
+    if (error) throw new Error(`Failed to save draft copy: ${error.message}`);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    await supabase
+      .from('case_studies')
+      .update({ last_error: message })
+      .eq('id', id);
+    throw err;
+  }
+}
+
 export async function updateCaseStudyFields(
   id: string,
   fields: Partial<Pick<
@@ -119,6 +160,17 @@ export async function updateCaseStudyFields(
     | 'edge_details'
     | 'fixings'
     | 'club_types'
+    | 'h1_page_title'
+    | 'h1_introduction_text'
+    | 'h2_design_highlights_title'
+    | 'h2_design_highlights_text'
+    | 'h2_summary_title'
+    | 'h2_summary_text'
+    | 'cta_text'
+    | 'page_meta_title'
+    | 'page_meta_description'
+    | 'schema_title'
+    | 'schema_desc'
   >>,
 ): Promise<void> {
   const supabase = createAdminClient();
