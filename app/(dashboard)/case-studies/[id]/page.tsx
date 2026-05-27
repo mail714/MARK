@@ -6,6 +6,7 @@ import { EditableField } from '@/components/case-studies/EditableField';
 import { RegenerateButton } from '@/components/case-studies/RegenerateButton';
 import { DraftCopyButton } from '@/components/case-studies/DraftCopyButton';
 import { PhotosPanel } from '@/components/case-studies/PhotosPanel';
+import { PublishButton } from '@/components/case-studies/PublishButton';
 
 export const dynamic = 'force-dynamic';
 
@@ -59,6 +60,15 @@ export default async function CaseStudyDetailPage({
             </span>
             <RegenerateButton driveFolderId={cs.drive_folder_id} />
           </div>
+        </div>
+        <div className="rounded-lg border border-neutral-200 bg-white p-4">
+          <PublishButton
+            caseStudyId={cs.id}
+            status={cs.status}
+            hasCopy={!!cs.h1_introduction_text}
+            hasPhotos={photos.some((p) => p.role === 'main') && photos.some((p) => p.role === 'image_2')}
+            wixPublishedUrl={cs.wix_published_url}
+          />
         </div>
         {cs.last_error ? (
           <div className="rounded-md border border-red-200 bg-red-50 p-3 text-xs font-mono text-red-800">
