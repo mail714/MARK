@@ -96,12 +96,23 @@ Unordered list:
 
 Use the \`emit_case_study\` tool to return the draft. All eleven fields are required. Body fields are HTML strings as described above. Title fields are plain text (no HTML).
 
-Total word count across the three body sections combined should be roughly 500–800 words. Page meta title around 60 characters. Page meta description around 150–160 characters. SchemaDesc around 30–40 words.`;
+Total word count across the three body sections combined should be roughly 500–800 words. Page meta title around 60 characters. Page meta description around 150–160 characters.
+
+# SchemaDesc — special instruction for AI discoverability
+
+\`schema_desc\` is consumed by search engines AND by AI search tools (ChatGPT search, Perplexity, Google AI Overviews) for entity extraction. Pack it with named entities and concrete facts so an LLM can parse out what this project actually is. 30–40 words, single paragraph, plain text (no HTML). Include, where present in the source spec: the customer organisation, the sector ("school" / "cricket club" / "Masonic lodge" / etc.), the UK location if known (town and/or county), board type and quantity, the canonical size, and the headline material/finish. Write it as one tight sentence — readable, not a list — but front-load the named entities.
+
+Example shape: "A suite of 22 acrylic honours boards installed at The Bishop's Stortford High School in Hertfordshire, manufactured in 8mm clear acrylic with gold vinyl lettering and stand-off black fixings to record school prize-giving across 22 awards."`;
 
 function fmtSpec(spec: ExtractedSpec): string {
   const lines: string[] = [];
   if (spec.customerName) lines.push(`Customer: ${spec.customerName}`);
   if (spec.customerBrief) lines.push(`Brief: ${spec.customerBrief}`);
+  if (spec.customerAddress) {
+    lines.push(
+      `Customer address (location context only — extract town/county for SchemaDesc, do not print the full address): ${spec.customerAddress}`,
+    );
+  }
   if (spec.boardType) lines.push(`Board type: ${spec.boardType}`);
   if (spec.style) lines.push(`Style: ${spec.style}`);
   if (spec.boardSize) lines.push(`Board size: ${spec.boardSize}`);
@@ -172,7 +183,11 @@ export const EMIT_TOOL = {
       page_meta_title: { type: 'string', description: 'SEO title, ~60 characters.' },
       page_meta_description: { type: 'string', description: 'SEO meta description, ~150–160 characters.' },
       schema_title: { type: 'string', description: 'Short structured-data title.' },
-      schema_desc: { type: 'string', description: 'Structured-data description, ~30–40 words.' },
+      schema_desc: {
+        type: 'string',
+        description:
+          'Structured-data description, ~30–40 words. Pack with named entities and concrete facts for LLM entity extraction: customer organisation, sector, UK town/county, board type and quantity, canonical size, headline material/finish. One tight sentence, plain text.',
+      },
     },
   },
 } as const;
