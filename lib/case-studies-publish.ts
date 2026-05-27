@@ -1,5 +1,6 @@
 import { createAdminClient } from '@/lib/supabase/admin';
 import { getCaseStudyPhotos } from '@/lib/case-study-photos';
+import { moveFolderToPublished } from '@/lib/drive/move';
 import { importImageFromUrl } from '@/lib/wix/media';
 import { publishCaseStudy as publishToWix } from '@/lib/wix/cms';
 import type { CaseStudy } from '@/lib/types';
@@ -106,6 +107,21 @@ export async function publishCaseStudy(id: string): Promise<{ wixItemId: string;
       })
       .eq('id', id);
     if (updateErr) throw new Error(`Failed to save publish state: ${updateErr.message}`);
+
+    // Non-fatal: archive the Drive folder. If this fails the publish is
+    // already done — log the issue on the row but don't unwind.
+    const rootId = process.env.HONOURS_BOARDS_DRIVE_ROOT_ID;
+    if (rootId) {
+      try {
+        await moveFolderToPublished(cs.drive_folder_id, rootId);
+      } catch (moveErr) {
+        const moveMessage = moveErr instanceof Error ? moveErr.message : String(moveErr);
+        await supabase
+          .from('case_studies')
+          .update({ last_error: `Published OK but failed to archive Drive folder: ${moveMessage}` })
+          .eq('id', id);
+      }
+    }
 
     return { wixItemId: result.id, wixUrlSlug: result.slug };
   } catch (err) {

@@ -72,7 +72,12 @@ export async function getCaseStudyPhotos(caseStudyId: string): Promise<CaseStudy
 export async function processPhotosForCaseStudy(caseStudyId: string): Promise<void> {
   const cs = await getCaseStudyOrThrow(caseStudyId);
   const folder = await findDriveFolder(cs);
-  if (!folder || folder.photos.length === 0) {
+  if (!folder) {
+    throw new Error(
+      "Drive folder no longer in 1-Pending — it may have been archived to 3-Published after publishing. Move it back to 1-Pending if you need to re-process photos.",
+    );
+  }
+  if (folder.photos.length === 0) {
     throw new Error('No photos found in the Drive job folder.');
   }
 
