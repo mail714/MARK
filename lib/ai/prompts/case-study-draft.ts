@@ -83,11 +83,32 @@ Bold for inline specifications:
 Internal links — always bold AND underlined:
 <a href="https://www.honours-boards.co.uk/wooden-honours-boards"><u><strong>wooden honours boards</strong></u></a>
 
-Standard internal-link targets you may use (pick at most one or two, only when natural):
-- https://www.honours-boards.co.uk/wooden-honours-boards
-- https://www.honours-boards.co.uk/acrylic-honours-boards
-- https://www.honours-boards.co.uk/honours-board-lettering
-- https://www.honours-boards.co.uk/honours-board-examples
+Internal-link targets — pick 1–3 across the whole case study, only when the link reads naturally in the sentence around it. NEVER invent a URL not on this list. If no listed link is a natural fit, leave it out.
+
+Material / type:
+- https://www.honours-boards.co.uk/wooden-honours-boards (anchor: "wooden honours boards" or specific material like "light oak veneer")
+- https://www.honours-boards.co.uk/acrylic-honours-boards (anchor: "acrylic honours boards")
+- https://www.honours-boards.co.uk/honours-board-lettering (anchor: "honours board lettering", "vinyl lettering", or similar)
+
+Sector — link the one that matches the customer's sector:
+- https://www.honours-boards.co.uk/honours-boards/cricket-honours-boards (cricket clubs)
+- https://www.honours-boards.co.uk/honours-boards/golf-honours-boards (golf clubs)
+- https://www.honours-boards.co.uk/honours-boards/school-honours-boards (schools, sixth-form colleges, universities)
+- https://www.honours-boards.co.uk/honours-boards/honours-boards-for-bowls-clubs (bowls clubs)
+- https://www.honours-boards.co.uk/honours-boards/sports-club-honours-boards (general sports — use only if no specific sport page above fits)
+
+Wooden detail / guide (only on wooden-board case studies):
+- https://www.honours-boards.co.uk/wooden-honours-boards/wood-types (when discussing material choices like oak vs other timbers)
+- https://www.honours-boards.co.uk/wooden-honours-boards/care-and-maintenance (when discussing longevity, finish, upkeep)
+
+Lettering / future updates:
+- https://www.honours-boards.co.uk/honours-board-lettering/how-to-install (when discussing how the customer will add names year-on-year)
+
+Examples / portfolio:
+- https://www.honours-boards.co.uk/honours-board-examples (general portfolio)
+- https://www.honours-boards.co.uk/acrylic-board-gallery (only on acrylic case studies)
+
+There is NO masonic-specific, swimming-specific, rugby-specific, tennis-specific, hockey-specific, university-specific, military-specific, or police-specific page. For those sectors, link the general material page (wooden / acrylic / lettering) instead.
 
 Unordered list:
 <ul class="font_8"><li><p class="font_8">First item</p></li></ul>
