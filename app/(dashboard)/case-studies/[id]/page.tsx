@@ -1,9 +1,11 @@
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { getCaseStudy } from '@/lib/case-studies';
+import { getCaseStudyPhotos } from '@/lib/case-study-photos';
 import { EditableField } from '@/components/case-studies/EditableField';
 import { RegenerateButton } from '@/components/case-studies/RegenerateButton';
 import { DraftCopyButton } from '@/components/case-studies/DraftCopyButton';
+import { PhotosPanel } from '@/components/case-studies/PhotosPanel';
 
 export const dynamic = 'force-dynamic';
 
@@ -24,6 +26,7 @@ export default async function CaseStudyDetailPage({
   const { id } = await params;
   const cs = await getCaseStudy(id);
   if (!cs) notFound();
+  const photos = await getCaseStudyPhotos(id);
 
   const status = STATUS_LABEL[cs.status] ?? STATUS_LABEL.pending;
 
@@ -122,6 +125,8 @@ export default async function CaseStudyDetailPage({
           />
         </div>
       </section>
+
+      <PhotosPanel caseStudyId={cs.id} photos={photos} />
 
       <section>
         <div className="flex items-end justify-between gap-4">
