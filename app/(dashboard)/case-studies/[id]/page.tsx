@@ -71,7 +71,7 @@ export default async function CaseStudyDetailPage({
           Pulled from the sales order and proof PDFs. Edit anything that looks
           off — changes save when you tab out of the field.
         </p>
-        <div className="mt-4 grid gap-4 sm:grid-cols-2">
+        <div className="mt-4 grid gap-4 sm:grid-cols-2" key={cs.updated_at}>
           <EditableField
             caseStudyId={cs.id}
             field="customer_name"
