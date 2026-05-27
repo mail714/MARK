@@ -1,4 +1,5 @@
 import { wix } from './client';
+import { caseStudySlugPath } from './slug';
 import type { CaseStudy } from '@/lib/types';
 
 const COLLECTION_ID = 'ProductsShowcase';
@@ -16,7 +17,15 @@ export type WixCaseStudyPayload = {
 };
 
 function mapPayload({ caseStudy, mainImageUri, mainImageAlt, image2Uri, image2Alt }: WixCaseStudyPayload) {
+  // Re-use the slug from the first publish (kept on the row) so SEO equity and
+  // any external links don't break across re-publishes. First publish derives
+  // a clean slug from the H1 title.
+  const slugPath = caseStudy.wix_url_slug
+    ? caseStudy.wix_url_slug
+    : caseStudySlugPath(caseStudy.h1_page_title ?? caseStudy.customer_name ?? caseStudy.drive_folder_name);
+
   return {
+    'link-products-showcase-title_fld': slugPath,
     title_fld: caseStudy.h1_page_title,
     description_fld: caseStudy.h1_introduction_text,
     h2DesignHighlights: caseStudy.h2_design_highlights_title,
