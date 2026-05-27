@@ -2,6 +2,7 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { getCaseStudy } from '@/lib/case-studies';
 import { EditableField } from '@/components/case-studies/EditableField';
+import { RegenerateButton } from '@/components/case-studies/RegenerateButton';
 
 export const dynamic = 'force-dynamic';
 
@@ -41,15 +42,19 @@ export default async function CaseStudyDetailPage({
             <h1 className="text-2xl font-semibold tracking-tight">
               {cs.customer_name ?? cs.drive_folder_name}
             </h1>
-            <p className="mt-1 text-sm text-neutral-600">
+            <div className="mt-1 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-neutral-500">
               <span className="font-mono">{cs.drive_folder_name}</span>
-            </p>
+              {cs.so_number ? <span>SO #{cs.so_number}</span> : null}
+            </div>
           </div>
-          <span
-            className={`inline-flex items-center rounded-full px-3 py-1 text-xs font-medium ring-1 ${status.tone}`}
-          >
-            {status.label}
-          </span>
+          <div className="flex flex-col items-end gap-2">
+            <span
+              className={`inline-flex items-center rounded-full px-3 py-1 text-xs font-medium ring-1 ${status.tone}`}
+            >
+              {status.label}
+            </span>
+            <RegenerateButton driveFolderId={cs.drive_folder_id} />
+          </div>
         </div>
         {cs.last_error ? (
           <div className="rounded-md border border-red-200 bg-red-50 p-3 text-xs font-mono text-red-800">
@@ -72,12 +77,6 @@ export default async function CaseStudyDetailPage({
             field="customer_name"
             label="Customer name"
             initialValue={cs.customer_name}
-          />
-          <EditableField
-            caseStudyId={cs.id}
-            field="so_number"
-            label="SO number"
-            initialValue={cs.so_number}
           />
           <EditableField
             caseStudyId={cs.id}

@@ -1,5 +1,6 @@
 import { getDriveClient } from '@/lib/drive/client';
 import type { PendingFolder } from '@/lib/drive/folders';
+import { tidySpecValue } from './normalise';
 import { parseProofPdf, type ProofSummary } from './proof';
 import { parseSalesOrderPdf, type SalesOrder } from './sales-order';
 
@@ -61,12 +62,12 @@ export async function extractFromPendingFolder(
     contactPhone: so?.contactPhone ?? null,
     orderDate: so?.orderDate ?? null,
     boardType: proof?.canonical.boardType ?? null,
-    boardSize: proof?.canonical.size ?? fallbackSize,
-    material: proof?.canonical.material ?? null,
-    background: proof?.canonical.background ?? null,
-    graphics: proof?.canonical.graphics ?? null,
-    fixings: proof?.canonical.fixings ?? null,
-    style: proof?.canonical.style ?? null,
+    boardSize: tidySpecValue(proof?.canonical.size ?? fallbackSize),
+    material: tidySpecValue(proof?.canonical.material ?? null),
+    background: tidySpecValue(proof?.canonical.background ?? null),
+    graphics: tidySpecValue(proof?.canonical.graphics ?? null),
+    fixings: tidySpecValue(proof?.canonical.fixings ?? null),
+    style: tidySpecValue(proof?.canonical.style ?? null),
     boardCount: proof?.boards.length ?? 0,
     salesOrder: so,
     proof,
