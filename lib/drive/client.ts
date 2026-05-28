@@ -22,7 +22,10 @@ export function getDriveClient(): drive_v3.Drive {
 
   const auth = new google.auth.GoogleAuth({
     keyFile: absolute,
-    scopes: ['https://www.googleapis.com/auth/drive.readonly'],
+    // Full Drive access so we can move folders between 1-Pending and
+    // 3-Published. The service account is only shared on the case-studies
+    // root folder, so the blast radius is contained to that subtree.
+    scopes: ['https://www.googleapis.com/auth/drive'],
   });
 
   cached = google.drive({ version: 'v3', auth });
