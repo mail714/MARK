@@ -1,13 +1,16 @@
 import Link from 'next/link';
 import {
+  getCompletedCaseStudies,
   getHonoursBoardsPendingFolders,
+  type CompletedCaseStudy,
   type PendingFolderWithStatus,
 } from '@/lib/case-studies';
 import { GenerateButton } from '@/components/case-studies/GenerateButton';
+import { DeleteButton } from '@/components/case-studies/DeleteButton';
 
 export const dynamic = 'force-dynamic';
 
-function fmtDate(iso?: string) {
+function fmtDate(iso?: string | null) {
   if (!iso) return '';
   return new Date(iso).toLocaleDateString('en-GB', {
     day: '2-digit',
@@ -50,7 +53,7 @@ function Badge({ ok, label }: { ok: boolean; label: string }) {
   );
 }
 
-function Row({ folder }: { folder: PendingFolderWithStatus }) {
+function PendingRow({ folder }: { folder: PendingFolderWithStatus }) {
   const photoCount = folder.files.photos.length;
   const cs = folder.caseStudy;
   return (
@@ -71,17 +74,69 @@ function Row({ folder }: { folder: PendingFolderWithStatus }) {
       <td className="px-4 py-3 text-sm text-neutral-500">
         {fmtDate(folder.modifiedTime)}
       </td>
-      <td className="px-4 py-3 text-right">
-        {cs ? (
+      <td className="px-4 py-3">
+        <div className="flex items-center justify-end gap-2">
+          {cs ? (
+            <Link
+              href={`/case-studies/${cs.id}`}
+              className="text-xs font-medium text-neutral-700 underline-offset-2 hover:underline"
+            >
+              View draft →
+            </Link>
+          ) : (
+            <GenerateButton driveFolderId={folder.id} />
+          )}
+          <DeleteButton
+            driveFolderId={folder.id}
+            folderName={folder.name}
+          />
+        </div>
+      </td>
+    </tr>
+  );
+}
+
+function CompletedRow({ cs }: { cs: CompletedCaseStudy }) {
+  return (
+    <tr className="border-t border-neutral-200 hover:bg-neutral-50">
+      <td className="px-4 py-3 text-sm font-medium text-neutral-900">
+        <Link href={`/case-studies/${cs.id}`} className="hover:underline">
+          {cs.customer_name ?? cs.drive_folder_name}
+        </Link>
+        <div className="mt-1 flex items-center gap-2 text-xs text-neutral-500">
+          <StatusPill status={cs.status} />
+          {cs.so_number ? <span>SO #{cs.so_number}</span> : null}
+        </div>
+      </td>
+      <td className="px-4 py-3 text-sm text-neutral-600">
+        {fmtDate(cs.published_at)}
+      </td>
+      <td className="px-4 py-3 text-sm">
+        {cs.wix_published_url ? (
+          <a
+            href={cs.wix_published_url}
+            target="_blank"
+            rel="noreferrer"
+            className="text-xs font-medium text-neutral-700 underline-offset-2 hover:underline"
+          >
+            View live →
+          </a>
+        ) : null}
+      </td>
+      <td className="px-4 py-3">
+        <div className="flex items-center justify-end gap-2">
           <Link
             href={`/case-studies/${cs.id}`}
             className="text-xs font-medium text-neutral-700 underline-offset-2 hover:underline"
           >
-            View draft →
+            Open →
           </Link>
-        ) : (
-          <GenerateButton driveFolderId={folder.id} />
-        )}
+          <DeleteButton
+            driveFolderId={cs.drive_folder_id}
+            folderName={cs.drive_folder_name}
+            isPublished={cs.status === 'published'}
+          />
+        </div>
       </td>
     </tr>
   );
@@ -89,64 +144,87 @@ function Row({ folder }: { folder: PendingFolderWithStatus }) {
 
 export default async function CaseStudiesPage() {
   let folders: PendingFolderWithStatus[] = [];
+  let completed: CompletedCaseStudy[] = [];
   let error: string | null = null;
 
   try {
     folders = await getHonoursBoardsPendingFolders();
+    completed = await getCompletedCaseStudies(folders.map((f) => f.id));
   } catch (err) {
     error = err instanceof Error ? err.message : String(err);
   }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-10">
       <header>
         <h1 className="text-2xl font-semibold tracking-tight">Case Studies</h1>
         <p className="mt-2 text-sm text-neutral-600">
-          Folders waiting in <code>1-Pending</code> for the Honours Boards brand.
+          Honours Boards jobs awaiting work and recently completed studies.
         </p>
       </header>
 
       {error ? (
         <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-800">
-          <div className="font-medium">Could not load Drive folders</div>
+          <div className="font-medium">Could not load</div>
           <div className="mt-1 font-mono text-xs">{error}</div>
         </div>
-      ) : folders.length === 0 ? (
-        <div className="rounded-lg border border-dashed border-neutral-300 bg-white p-12 text-center text-sm text-neutral-500">
-          No folders in <code>1-Pending</code> yet. Drop a job folder in Drive
-          and refresh.
-        </div>
-      ) : (
-        <div className="overflow-hidden rounded-lg border border-neutral-200 bg-white">
-          <table className="w-full">
-            <thead className="bg-neutral-50 text-left">
-              <tr>
-                <th className="px-4 py-2 text-xs font-medium uppercase tracking-wider text-neutral-500">
-                  Job
-                </th>
-                <th className="px-4 py-2 text-xs font-medium uppercase tracking-wider text-neutral-500">
-                  Sales order
-                </th>
-                <th className="px-4 py-2 text-xs font-medium uppercase tracking-wider text-neutral-500">
-                  Proof
-                </th>
-                <th className="px-4 py-2 text-xs font-medium uppercase tracking-wider text-neutral-500">
-                  Photos
-                </th>
-                <th className="px-4 py-2 text-xs font-medium uppercase tracking-wider text-neutral-500">
-                  Modified
-                </th>
-                <th className="px-4 py-2"></th>
-              </tr>
-            </thead>
-            <tbody>
-              {folders.map((f) => (
-                <Row key={f.id} folder={f} />
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
+      ) : null}
+
+      <section className="space-y-3">
+        <h2 className="text-sm font-semibold uppercase tracking-wider text-neutral-500">
+          Pending — Drive <code className="text-xs">1-Pending</code>
+        </h2>
+        {folders.length === 0 ? (
+          <div className="rounded-lg border border-dashed border-neutral-300 bg-white p-12 text-center text-sm text-neutral-500">
+            No folders in <code>1-Pending</code>. Drop a job folder in Drive and refresh.
+          </div>
+        ) : (
+          <div className="overflow-hidden rounded-lg border border-neutral-200 bg-white">
+            <table className="w-full">
+              <thead className="bg-neutral-50 text-left">
+                <tr>
+                  <th className="px-4 py-2 text-xs font-medium uppercase tracking-wider text-neutral-500">Job</th>
+                  <th className="px-4 py-2 text-xs font-medium uppercase tracking-wider text-neutral-500">Sales order</th>
+                  <th className="px-4 py-2 text-xs font-medium uppercase tracking-wider text-neutral-500">Proof</th>
+                  <th className="px-4 py-2 text-xs font-medium uppercase tracking-wider text-neutral-500">Photos</th>
+                  <th className="px-4 py-2 text-xs font-medium uppercase tracking-wider text-neutral-500">Modified</th>
+                  <th className="px-4 py-2"></th>
+                </tr>
+              </thead>
+              <tbody>
+                {folders.map((f) => <PendingRow key={f.id} folder={f} />)}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+
+      <section className="space-y-3">
+        <h2 className="text-sm font-semibold uppercase tracking-wider text-neutral-500">
+          Completed
+        </h2>
+        {completed.length === 0 ? (
+          <div className="rounded-lg border border-dashed border-neutral-300 bg-white p-8 text-center text-sm text-neutral-500">
+            No case studies published yet.
+          </div>
+        ) : (
+          <div className="overflow-hidden rounded-lg border border-neutral-200 bg-white">
+            <table className="w-full">
+              <thead className="bg-neutral-50 text-left">
+                <tr>
+                  <th className="px-4 py-2 text-xs font-medium uppercase tracking-wider text-neutral-500">Case study</th>
+                  <th className="px-4 py-2 text-xs font-medium uppercase tracking-wider text-neutral-500">Published</th>
+                  <th className="px-4 py-2 text-xs font-medium uppercase tracking-wider text-neutral-500">Live URL</th>
+                  <th className="px-4 py-2"></th>
+                </tr>
+              </thead>
+              <tbody>
+                {completed.map((cs) => <CompletedRow key={cs.id} cs={cs} />)}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
     </div>
   );
 }

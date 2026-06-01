@@ -1,5 +1,6 @@
 import { createAdminClient } from '@/lib/supabase/admin';
 import { getBrandBySlug } from '@/lib/brands';
+import { trashFolder } from '@/lib/drive/delete';
 import { listPendingFolders, type PendingFolder } from '@/lib/drive/folders';
 import { extractFromPendingFolder } from '@/lib/pdf/extract';
 import { draftCaseStudy } from '@/lib/ai/draft';
@@ -8,6 +9,18 @@ import type { CaseStudy } from '@/lib/types';
 export type PendingFolderWithStatus = PendingFolder & {
   caseStudy: Pick<CaseStudy, 'id' | 'status'> | null;
 };
+
+export type CompletedCaseStudy = Pick<
+  CaseStudy,
+  | 'id'
+  | 'status'
+  | 'drive_folder_id'
+  | 'drive_folder_name'
+  | 'customer_name'
+  | 'so_number'
+  | 'published_at'
+  | 'wix_published_url'
+>;
 
 export async function getHonoursBoardsPendingFolders(): Promise<PendingFolderWithStatus[]> {
   const brand = await getBrandBySlug('honours-boards');
@@ -34,6 +47,38 @@ export async function getHonoursBoardsPendingFolders(): Promise<PendingFolderWit
   );
 
   return folders.map((f) => ({ ...f, caseStudy: byFolder.get(f.id) ?? null }));
+}
+
+// Case studies whose Drive folder is NOT currently in 1-Pending (i.e. they've
+// been published, or the folder was archived/moved/deleted). Ordered most
+// recent first.
+export async function getCompletedCaseStudies(
+  excludeDriveFolderIds: string[],
+): Promise<CompletedCaseStudy[]> {
+  const brand = await getBrandBySlug('honours-boards');
+  const supabase = createAdminClient();
+
+  let query = supabase
+    .from('case_studies')
+    .select(
+      'id, status, drive_folder_id, drive_folder_name, customer_name, so_number, published_at, wix_published_url',
+    )
+    .eq('brand_id', brand.id)
+    .order('published_at', { ascending: false, nullsFirst: false })
+    .order('updated_at', { ascending: false });
+  if (excludeDriveFolderIds.length) {
+    // Supabase .not('drive_folder_id', 'in', ...) doesn't accept the array
+    // form directly — wrap the values in (...).
+    query = query.filter(
+      'drive_folder_id',
+      'not.in',
+      `(${excludeDriveFolderIds.map((id) => `"${id}"`).join(',')})`,
+    );
+  }
+
+  const { data, error } = await query;
+  if (error) throw new Error(`Failed to load completed case studies: ${error.message}`);
+  return (data as CompletedCaseStudy[]) ?? [];
 }
 
 export async function getCaseStudy(id: string): Promise<CaseStudy | null> {
@@ -144,6 +189,63 @@ export async function draftCopyForCaseStudy(id: string): Promise<void> {
       .update({ last_error: message })
       .eq('id', id);
     throw err;
+  }
+}
+
+// Wipe a case study from MARK and trash its Drive folder. Removes processed
+// photos from Supabase Storage, deletes the case_studies row (which cascades
+// to case_study_photos and social_posts via FK), and trashes the Drive folder
+// (which cascades to all contents). Wix items are NOT touched — use the
+// existing Reset Wix link button first if you also want the live item gone.
+export async function deleteByDriveFolderId(driveFolderId: string): Promise<{
+  driveTrashed: boolean;
+  caseStudyDeleted: boolean;
+}> {
+  const supabase = createAdminClient();
+
+  // Find any case study associated with this folder so we can clean up
+  // dependent storage objects before the cascade fires.
+  const { data: existing, error: lookupErr } = await supabase
+    .from('case_studies')
+    .select('id')
+    .eq('drive_folder_id', driveFolderId)
+    .maybeSingle();
+  if (lookupErr) throw new Error(`Failed to look up case study: ${lookupErr.message}`);
+
+  let caseStudyDeleted = false;
+  if (existing) {
+    const { data: photos } = await supabase
+      .from('case_study_photos')
+      .select('processed_storage_path')
+      .eq('case_study_id', existing.id);
+    const paths = (photos ?? [])
+      .map((p) => p.processed_storage_path as string | null)
+      .filter((p): p is string => !!p);
+    if (paths.length) {
+      const rm = await supabase.storage.from('case-study-photos').remove(paths);
+      if (rm.error) {
+        // Storage delete failures shouldn't block the DB cascade — log the
+        // path and keep going. Worst case is a few orphaned blobs.
+        console.warn('Failed to remove some storage objects:', rm.error.message);
+      }
+    }
+    const del = await supabase.from('case_studies').delete().eq('id', existing.id);
+    if (del.error) throw new Error(`Failed to delete case study row: ${del.error.message}`);
+    caseStudyDeleted = true;
+  }
+
+  // Trash the Drive folder last so failures upstream don't leave the folder
+  // gone with DB rows still pointing at it.
+  try {
+    await trashFolder(driveFolderId);
+    return { driveTrashed: true, caseStudyDeleted };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    // 404 means the folder is already gone — treat as success.
+    if (/not found|404/i.test(message)) {
+      return { driveTrashed: false, caseStudyDeleted };
+    }
+    throw new Error(`Failed to trash Drive folder: ${message}`);
   }
 }
 
