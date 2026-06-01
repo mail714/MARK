@@ -96,6 +96,90 @@ function PendingRow({ folder }: { folder: PendingFolderWithStatus }) {
   );
 }
 
+function Pager({
+  page,
+  totalPages,
+  search,
+  showingFrom,
+  showingTo,
+  total,
+}: {
+  page: number;
+  totalPages: number;
+  search: string;
+  showingFrom: number;
+  showingTo: number;
+  total: number;
+}) {
+  if (totalPages <= 1) {
+    return (
+      <div className="text-xs text-neutral-500">
+        Showing {showingFrom}–{showingTo} of {total}
+      </div>
+    );
+  }
+
+  const pageUrl = (n: number) => {
+    const sp = new URLSearchParams();
+    if (n > 1) sp.set('page', String(n));
+    if (search) sp.set('q', search);
+    const qs = sp.toString();
+    return qs ? `/case-studies?${qs}` : '/case-studies';
+  };
+
+  // Compact window of page numbers around the current page.
+  const windowStart = Math.max(1, page - 2);
+  const windowEnd = Math.min(totalPages, page + 2);
+  const nums: number[] = [];
+  for (let n = windowStart; n <= windowEnd; n++) nums.push(n);
+
+  const linkClass =
+    'inline-flex h-7 min-w-7 items-center justify-center rounded border border-neutral-200 bg-white px-2 text-xs text-neutral-700 hover:border-neutral-400';
+  const activeClass =
+    'inline-flex h-7 min-w-7 items-center justify-center rounded border border-neutral-900 bg-neutral-900 px-2 text-xs font-medium text-white';
+  const disabledClass =
+    'inline-flex h-7 min-w-7 items-center justify-center rounded border border-neutral-100 bg-neutral-50 px-2 text-xs text-neutral-300';
+
+  return (
+    <div className="flex items-center justify-between gap-3 pt-2">
+      <div className="text-xs text-neutral-500">
+        Showing {showingFrom}–{showingTo} of {total}
+      </div>
+      <div className="flex items-center gap-1">
+        {page > 1 ? (
+          <Link href={pageUrl(page - 1)} className={linkClass}>← Prev</Link>
+        ) : (
+          <span className={disabledClass}>← Prev</span>
+        )}
+        {windowStart > 1 ? (
+          <>
+            <Link href={pageUrl(1)} className={linkClass}>1</Link>
+            {windowStart > 2 ? <span className="px-1 text-xs text-neutral-400">…</span> : null}
+          </>
+        ) : null}
+        {nums.map((n) =>
+          n === page ? (
+            <span key={n} className={activeClass}>{n}</span>
+          ) : (
+            <Link key={n} href={pageUrl(n)} className={linkClass}>{n}</Link>
+          ),
+        )}
+        {windowEnd < totalPages ? (
+          <>
+            {windowEnd < totalPages - 1 ? <span className="px-1 text-xs text-neutral-400">…</span> : null}
+            <Link href={pageUrl(totalPages)} className={linkClass}>{totalPages}</Link>
+          </>
+        ) : null}
+        {page < totalPages ? (
+          <Link href={pageUrl(page + 1)} className={linkClass}>Next →</Link>
+        ) : (
+          <span className={disabledClass}>Next →</span>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function CompletedRow({ cs }: { cs: CompletedCaseStudy }) {
   return (
     <tr className="border-t border-neutral-200 hover:bg-neutral-50">
@@ -142,17 +226,40 @@ function CompletedRow({ cs }: { cs: CompletedCaseStudy }) {
   );
 }
 
-export default async function CaseStudiesPage() {
+export default async function CaseStudiesPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ page?: string; q?: string }>;
+}) {
+  const params = await searchParams;
+  const search = (params.q ?? '').trim();
+  const page = Math.max(1, parseInt(params.page ?? '1', 10) || 1);
+  const pageSize = 15;
+
   let folders: PendingFolderWithStatus[] = [];
-  let completed: CompletedCaseStudy[] = [];
+  let completed: {
+    items: CompletedCaseStudy[];
+    total: number;
+    page: number;
+    pageSize: number;
+  } = { items: [], total: 0, page, pageSize };
   let error: string | null = null;
 
   try {
     folders = await getHonoursBoardsPendingFolders();
-    completed = await getCompletedCaseStudies(folders.map((f) => f.id));
+    completed = await getCompletedCaseStudies({
+      excludeDriveFolderIds: folders.map((f) => f.id),
+      page,
+      pageSize,
+      search: search || undefined,
+    });
   } catch (err) {
     error = err instanceof Error ? err.message : String(err);
   }
+
+  const totalPages = Math.max(1, Math.ceil(completed.total / completed.pageSize));
+  const showingFrom = completed.items.length === 0 ? 0 : (completed.page - 1) * completed.pageSize + 1;
+  const showingTo = (completed.page - 1) * completed.pageSize + completed.items.length;
 
   return (
     <div className="space-y-10">
@@ -200,29 +307,69 @@ export default async function CaseStudiesPage() {
       </section>
 
       <section className="space-y-3">
-        <h2 className="text-sm font-semibold uppercase tracking-wider text-neutral-500">
-          Completed
-        </h2>
-        {completed.length === 0 ? (
+        <div className="flex flex-wrap items-end justify-between gap-3">
+          <h2 className="text-sm font-semibold uppercase tracking-wider text-neutral-500">
+            Completed
+          </h2>
+          <form action="/case-studies" method="get" className="flex items-center gap-2">
+            <input
+              type="search"
+              name="q"
+              defaultValue={search}
+              placeholder="Search customer, folder, or SO #"
+              className="w-64 rounded-md border border-neutral-300 bg-white px-3 py-1.5 text-sm shadow-sm placeholder:text-neutral-400 focus:border-neutral-500 focus:outline-none"
+            />
+            <button
+              type="submit"
+              className="rounded-md bg-neutral-900 px-3 py-1.5 text-xs font-medium text-white hover:bg-neutral-700"
+            >
+              Search
+            </button>
+            {search ? (
+              <Link
+                href="/case-studies"
+                className="text-xs text-neutral-500 hover:text-neutral-700"
+              >
+                Clear
+              </Link>
+            ) : null}
+          </form>
+        </div>
+
+        {completed.items.length === 0 ? (
           <div className="rounded-lg border border-dashed border-neutral-300 bg-white p-8 text-center text-sm text-neutral-500">
-            No case studies published yet.
+            {search ? (
+              <>No completed case studies match &quot;{search}&quot;.</>
+            ) : (
+              <>No case studies published yet.</>
+            )}
           </div>
         ) : (
-          <div className="overflow-hidden rounded-lg border border-neutral-200 bg-white">
-            <table className="w-full">
-              <thead className="bg-neutral-50 text-left">
-                <tr>
-                  <th className="px-4 py-2 text-xs font-medium uppercase tracking-wider text-neutral-500">Case study</th>
-                  <th className="px-4 py-2 text-xs font-medium uppercase tracking-wider text-neutral-500">Published</th>
-                  <th className="px-4 py-2 text-xs font-medium uppercase tracking-wider text-neutral-500">Live URL</th>
-                  <th className="px-4 py-2"></th>
-                </tr>
-              </thead>
-              <tbody>
-                {completed.map((cs) => <CompletedRow key={cs.id} cs={cs} />)}
-              </tbody>
-            </table>
-          </div>
+          <>
+            <div className="overflow-hidden rounded-lg border border-neutral-200 bg-white">
+              <table className="w-full">
+                <thead className="bg-neutral-50 text-left">
+                  <tr>
+                    <th className="px-4 py-2 text-xs font-medium uppercase tracking-wider text-neutral-500">Case study</th>
+                    <th className="px-4 py-2 text-xs font-medium uppercase tracking-wider text-neutral-500">Published</th>
+                    <th className="px-4 py-2 text-xs font-medium uppercase tracking-wider text-neutral-500">Live URL</th>
+                    <th className="px-4 py-2"></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {completed.items.map((cs) => <CompletedRow key={cs.id} cs={cs} />)}
+                </tbody>
+              </table>
+            </div>
+            <Pager
+              page={completed.page}
+              totalPages={totalPages}
+              search={search}
+              showingFrom={showingFrom}
+              showingTo={showingTo}
+              total={completed.total}
+            />
+          </>
         )}
       </section>
     </div>

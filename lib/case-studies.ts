@@ -51,34 +51,63 @@ export async function getHonoursBoardsPendingFolders(): Promise<PendingFolderWit
 
 // Case studies whose Drive folder is NOT currently in 1-Pending (i.e. they've
 // been published, or the folder was archived/moved/deleted). Ordered most
-// recent first.
-export async function getCompletedCaseStudies(
-  excludeDriveFolderIds: string[],
-): Promise<CompletedCaseStudy[]> {
+// recent first. Paged + searchable.
+export async function getCompletedCaseStudies(args: {
+  excludeDriveFolderIds: string[];
+  page?: number;
+  pageSize?: number;
+  search?: string;
+}): Promise<{
+  items: CompletedCaseStudy[];
+  total: number;
+  page: number;
+  pageSize: number;
+}> {
   const brand = await getBrandBySlug('honours-boards');
   const supabase = createAdminClient();
+  const pageSize = args.pageSize ?? 15;
+  const page = Math.max(1, args.page ?? 1);
+  const from = (page - 1) * pageSize;
+  const to = from + pageSize - 1;
 
   let query = supabase
     .from('case_studies')
     .select(
       'id, status, drive_folder_id, drive_folder_name, customer_name, so_number, published_at, wix_published_url',
+      { count: 'exact' },
     )
-    .eq('brand_id', brand.id)
-    .order('published_at', { ascending: false, nullsFirst: false })
-    .order('updated_at', { ascending: false });
-  if (excludeDriveFolderIds.length) {
-    // Supabase .not('drive_folder_id', 'in', ...) doesn't accept the array
-    // form directly — wrap the values in (...).
+    .eq('brand_id', brand.id);
+
+  if (args.excludeDriveFolderIds.length) {
     query = query.filter(
       'drive_folder_id',
       'not.in',
-      `(${excludeDriveFolderIds.map((id) => `"${id}"`).join(',')})`,
+      `(${args.excludeDriveFolderIds.map((id) => `"${id}"`).join(',')})`,
     );
   }
 
-  const { data, error } = await query;
+  const q = args.search?.trim();
+  if (q) {
+    // Escape PostgREST ilike wildcards so a typed % doesn't break the search.
+    const safe = q.replace(/[%_,]/g, (c) => `\\${c}`);
+    query = query.or(
+      `customer_name.ilike.%${safe}%,drive_folder_name.ilike.%${safe}%,so_number.ilike.%${safe}%`,
+    );
+  }
+
+  query = query
+    .order('published_at', { ascending: false, nullsFirst: false })
+    .order('updated_at', { ascending: false })
+    .range(from, to);
+
+  const { data, count, error } = await query;
   if (error) throw new Error(`Failed to load completed case studies: ${error.message}`);
-  return (data as CompletedCaseStudy[]) ?? [];
+  return {
+    items: (data as CompletedCaseStudy[]) ?? [],
+    total: count ?? 0,
+    page,
+    pageSize,
+  };
 }
 
 export async function getCaseStudy(id: string): Promise<CaseStudy | null> {
