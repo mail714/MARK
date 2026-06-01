@@ -26,7 +26,7 @@ console.log(`  photos:     ${folder.files.photos.length}\n`);
 const spec = await extractFromPendingFolder(folder);
 
 // Drop raw text for readability
-const { salesOrder, proof, ...top } = spec;
+const { salesOrder, ...top } = spec;
 console.log('=== Extracted spec ===');
 console.log(JSON.stringify(top, null, 2));
 
@@ -42,17 +42,4 @@ if (salesOrder) {
   }
 } else {
   console.log('(no sales order PDF)');
-}
-
-console.log('\n=== Proof summary ===');
-if (proof) {
-  const { rawText: _rawP, boards, ...proofSummary } = proof;
-  console.log(JSON.stringify(proofSummary, null, 2));
-  console.log(`\n  ${boards.length} board(s) detected:`);
-  for (const b of boards.slice(0, 5)) {
-    console.log(`  ref ${b.ref}: ${b.name} — ${b.size}, ${b.material}`);
-  }
-  if (boards.length > 5) console.log(`  ... and ${boards.length - 5} more`);
-} else {
-  console.log('(no proof PDF)');
 }
