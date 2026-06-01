@@ -111,6 +111,22 @@ function classifyFiles(children: DriveFile[]): PendingFolder['files'] {
     }
     other.push(f);
   }
+
+  // Fallback: if one of sales-order / proof was identified by filename and
+  // exactly one other PDF sits in the folder, treat it as the missing pair.
+  // Covers folders where the proof is named after the SO number or job, with
+  // no "proof" keyword in the filename.
+  const orphanPdfs = other.filter((f) => f.mimeType === PDF_MIME);
+  if (orphanPdfs.length === 1) {
+    if (salesOrder && !proof) {
+      proof = orphanPdfs[0];
+      other.splice(other.indexOf(orphanPdfs[0]), 1);
+    } else if (proof && !salesOrder) {
+      salesOrder = orphanPdfs[0];
+      other.splice(other.indexOf(orphanPdfs[0]), 1);
+    }
+  }
+
   return { salesOrder, proof, photos, other };
 }
 
