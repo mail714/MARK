@@ -164,6 +164,7 @@ export async function generateCaseStudyForFolder(driveFolderId: string): Promise
         text_colour: spec.graphics,
         edge_details: spec.style,
         fixings: spec.fixings,
+        club_types: spec.clubTypes,
         generated_at: new Date().toISOString(),
         last_error: null,
       })

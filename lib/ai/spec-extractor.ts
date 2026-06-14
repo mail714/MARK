@@ -5,6 +5,11 @@
 
 import type Anthropic from '@anthropic-ai/sdk';
 import { DEFAULT_MODEL, getAnthropicClient } from './anthropic';
+import {
+  filterToValidClubTypes,
+  HONOURS_BOARDS_CLUB_TYPES,
+  type HonoursBoardsClubType,
+} from './club-types';
 
 export type SpecExtraction = {
   boardType: 'Wooden' | 'Acrylic' | 'Lettering' | null;
@@ -15,6 +20,7 @@ export type SpecExtraction = {
   fixings: string | null;
   style: string | null;
   boardCount: number;
+  clubTypes: HonoursBoardsClubType[];
 };
 
 const SYSTEM_PROMPT = `You extract the canonical board specification from honours-board sales-order and proof PDFs.
@@ -40,6 +46,24 @@ Field guidance:
 
 All text values should be sentence case, not ALL CAPS. Use null for any field genuinely absent from the source.
 
+CLUB TYPES — pick zero or more from this controlled list based on the customer:
+${HONOURS_BOARDS_CLUB_TYPES.map((c) => `- ${c}`).join('\n')}
+
+Mapping guidance:
+- School / college / sixth form / academy / university → "Schools"
+- Cricket club → "Cricket"
+- Golf club → "Golf"
+- Tennis / lawn tennis club → "Tennis"
+- Bowls / bowling club → "Bowls"
+- Football / rugby / hockey clubs → match the sport
+- Masonic lodge / chapter → "Masons"
+- Church / chapel / cathedral / synagogue / temple → "Religious"
+- Police / fire / council / armed forces / civic → "Government"
+- Business / company / firm / law firm → "Corporate"
+- General sports club not covered above (squash, hockey, multi-sport) → "Sports Clubs"
+
+A customer may map to multiple tags (e.g. a school cricket club → Cricket AND Schools). Only return tags that genuinely apply. Empty list is fine if nothing fits.
+
 Use the emit_spec tool to return the result.`;
 
 const EMIT_TOOL = {
@@ -47,7 +71,16 @@ const EMIT_TOOL = {
   description: 'Emit the canonical board spec extracted from the source PDFs.',
   input_schema: {
     type: 'object' as const,
-    required: ['boardType', 'boardSize', 'material', 'graphics', 'fixings', 'style', 'boardCount'],
+    required: [
+      'boardType',
+      'boardSize',
+      'material',
+      'graphics',
+      'fixings',
+      'style',
+      'boardCount',
+      'clubTypes',
+    ],
     properties: {
       boardType: { type: ['string', 'null'], enum: ['Wooden', 'Acrylic', 'Lettering', null] },
       boardSize: { type: ['string', 'null'] },
@@ -57,6 +90,10 @@ const EMIT_TOOL = {
       fixings: { type: ['string', 'null'] },
       style: { type: ['string', 'null'] },
       boardCount: { type: 'integer', minimum: 1 },
+      clubTypes: {
+        type: 'array',
+        items: { type: 'string', enum: [...HONOURS_BOARDS_CLUB_TYPES] as string[] },
+      },
     },
   },
 };
@@ -103,5 +140,6 @@ export async function extractSpecWithClaude(args: {
     fixings: input.fixings ?? null,
     style: input.style ?? null,
     boardCount: input.boardCount ?? 1,
+    clubTypes: filterToValidClubTypes(input.clubTypes as readonly string[] | undefined),
   };
 }

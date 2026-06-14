@@ -12,6 +12,8 @@ export function getAnthropicClient(): Anthropic {
   return cached;
 }
 
-// Latest Sonnet — a sensible default for voice-grounded copywriting.
-// Bump to claude-opus-4-7 for higher-stakes generations if needed.
-export const DEFAULT_MODEL = 'claude-sonnet-4-6';
+// Opus 4.7 — used by default for the case-study drafting flow. Tuned harder
+// against the obvious AI tells (em-dash overuse, AI vocabulary, uniform
+// sentence cadence) than Sonnet, which matters since the drafts get scanned
+// by AI-content detectors before publication.
+export const DEFAULT_MODEL = 'claude-opus-4-7';

@@ -24,6 +24,7 @@ export type ExtractedSpec = {
   fixings: string | null;
   style: string | null;
   boardCount: number;
+  clubTypes: string[];
 
   // Underlying parsed sales-order kept for debugging / detail views
   salesOrder: SalesOrder | null;
@@ -68,6 +69,7 @@ export async function extractFromPendingFolder(
         fixings: null,
         style: null,
         boardCount: so?.items.filter((it) => it.qty && it.qty > 0).reduce((n, it) => n + (it.qty ?? 0), 0) || 0,
+        clubTypes: [] as string[],
       };
 
   return {
@@ -87,6 +89,7 @@ export async function extractFromPendingFolder(
     fixings: spec.fixings,
     style: spec.style,
     boardCount: spec.boardCount,
+    clubTypes: spec.clubTypes,
     salesOrder: so,
   };
 }
