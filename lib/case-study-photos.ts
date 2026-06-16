@@ -1,7 +1,7 @@
 import { createAdminClient } from '@/lib/supabase/admin';
 import { uploadProcessedImage } from '@/lib/supabase/storage';
 import { downloadDriveFile } from '@/lib/drive/download';
-import { listPendingFolders, type DriveFile } from '@/lib/drive/folders';
+import { getFolderContents, type DriveFile } from '@/lib/drive/folders';
 import { makeVisionThumb, resizeToHero } from '@/lib/images/process';
 import { pickHeroAndDetailImages, type VisionCandidate } from '@/lib/ai/vision';
 import type { CaseStudy } from '@/lib/types';
@@ -37,10 +37,7 @@ async function getCaseStudyOrThrow(id: string): Promise<CaseStudy> {
 }
 
 async function findDriveFolder(cs: CaseStudy): Promise<{ photos: DriveFile[] } | null> {
-  const rootId = process.env.HONOURS_BOARDS_DRIVE_ROOT_ID;
-  if (!rootId) throw new Error('HONOURS_BOARDS_DRIVE_ROOT_ID is not set');
-  const folders = await listPendingFolders(rootId);
-  const folder = folders.find((f) => f.id === cs.drive_folder_id);
+  const folder = await getFolderContents(cs.drive_folder_id);
   if (!folder) return null;
   return { photos: folder.files.photos };
 }
@@ -74,7 +71,7 @@ export async function processPhotosForCaseStudy(caseStudyId: string): Promise<vo
   const folder = await findDriveFolder(cs);
   if (!folder) {
     throw new Error(
-      "Drive folder no longer in 1-Pending — it may have been archived to 3-Published after publishing. Move it back to 1-Pending if you need to re-process photos.",
+      'Drive folder not found. It may have been trashed or moved out of the case-studies root.',
     );
   }
   if (folder.photos.length === 0) {

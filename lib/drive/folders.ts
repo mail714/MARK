@@ -130,6 +130,52 @@ function classifyFiles(children: DriveFile[]): PendingFolder['files'] {
   return { salesOrder, proof, photos, other };
 }
 
+// Build the PendingFolder view (files classified by role + photos pulled in
+// from the /photos subfolder) for any job folder by ID — does not care which
+// segment it currently sits under, so it works for folders already archived
+// to 3-Published just as well as for ones in 1-Pending.
+export async function getFolderContents(folderId: string): Promise<PendingFolder | null> {
+  const drive = getDriveClient();
+  let meta;
+  try {
+    const res = await drive.files.get({
+      fileId: folderId,
+      fields: 'id, name, modifiedTime, mimeType, trashed',
+      supportsAllDrives: true,
+    });
+    meta = res.data;
+  } catch {
+    return null;
+  }
+  if (!meta?.id || !meta.name) return null;
+  if (meta.trashed) return null;
+  if (meta.mimeType !== FOLDER_MIME) return null;
+
+  const children = await listChildren(meta.id);
+  const photosSubfolder = children.find(
+    (c) => c.mimeType === FOLDER_MIME && c.name.toLowerCase() === 'photos',
+  );
+
+  let photoFiles: DriveFile[] = [];
+  if (photosSubfolder) {
+    const subChildren = await listChildren(photosSubfolder.id);
+    photoFiles = subChildren.filter((c) => c.mimeType.startsWith(IMAGE_MIME_PREFIX));
+  }
+
+  const classified = classifyFiles(children);
+  classified.photos.push(...photoFiles);
+  const { soNumber, customerName } = parseFolderName(meta.name);
+
+  return {
+    id: meta.id,
+    name: meta.name,
+    modifiedTime: meta.modifiedTime ?? undefined,
+    soNumber,
+    customerName,
+    files: classified,
+  };
+}
+
 export async function listPendingFolders(
   rootFolderId: string,
 ): Promise<PendingFolder[]> {
@@ -155,34 +201,9 @@ export async function listPendingFolders(
   const results: PendingFolder[] = [];
 
   for (const folder of jobFolders) {
-    if (!folder.id || !folder.name) continue;
-
-    const children = await listChildren(folder.id);
-    const photosSubfolder = children.find(
-      (c) => c.mimeType === FOLDER_MIME && c.name.toLowerCase() === 'photos',
-    );
-
-    let photoFiles: DriveFile[] = [];
-    if (photosSubfolder) {
-      const subChildren = await listChildren(photosSubfolder.id);
-      photoFiles = subChildren.filter((c) =>
-        c.mimeType.startsWith(IMAGE_MIME_PREFIX),
-      );
-    }
-
-    const classified = classifyFiles(children);
-    classified.photos.push(...photoFiles);
-
-    const { soNumber, customerName } = parseFolderName(folder.name);
-
-    results.push({
-      id: folder.id,
-      name: folder.name,
-      modifiedTime: folder.modifiedTime ?? undefined,
-      soNumber,
-      customerName,
-      files: classified,
-    });
+    if (!folder.id) continue;
+    const contents = await getFolderContents(folder.id);
+    if (contents) results.push(contents);
   }
 
   return results;

@@ -1,7 +1,7 @@
 import { createAdminClient } from '@/lib/supabase/admin';
 import { getBrandBySlug } from '@/lib/brands';
 import { trashFolder } from '@/lib/drive/delete';
-import { listPendingFolders, type PendingFolder } from '@/lib/drive/folders';
+import { getFolderContents, listPendingFolders, type PendingFolder } from '@/lib/drive/folders';
 import { extractFromPendingFolder } from '@/lib/pdf/extract';
 import { draftCaseStudy } from '@/lib/ai/draft';
 import type { CaseStudy } from '@/lib/types';
@@ -126,9 +126,14 @@ export async function generateCaseStudyForFolder(driveFolderId: string): Promise
   const rootId = process.env.HONOURS_BOARDS_DRIVE_ROOT_ID;
   if (!rootId) throw new Error('HONOURS_BOARDS_DRIVE_ROOT_ID is not set');
 
-  const folders = await listPendingFolders(rootId);
-  const folder = folders.find((f) => f.id === driveFolderId);
-  if (!folder) throw new Error(`Drive folder ${driveFolderId} not in 1-Pending`);
+  // Resolve the folder by ID rather than scanning 1-Pending so Regenerate
+  // also works once the job has been archived to 3-Published.
+  const folder = await getFolderContents(driveFolderId);
+  if (!folder) {
+    throw new Error(
+      `Drive folder ${driveFolderId} not found. Has it been trashed or moved out of the case-studies root?`,
+    );
+  }
 
   const supabase = createAdminClient();
 
@@ -189,14 +194,12 @@ export async function draftCopyForCaseStudy(id: string): Promise<void> {
   const rootId = process.env.HONOURS_BOARDS_DRIVE_ROOT_ID;
   if (!rootId) throw new Error('HONOURS_BOARDS_DRIVE_ROOT_ID is not set');
 
-  // Re-fetch the Drive folder + PDFs. Acceptable cost for now; if generation
-  // turns out to be a hot path we can stash the spec in the case_studies row
-  // when extract runs.
-  const folders = await listPendingFolders(rootId);
-  const folder = folders.find((f) => f.id === cs.drive_folder_id);
+  // Resolve by ID so this also works once the folder has been archived to
+  // 3-Published after publish.
+  const folder = await getFolderContents(cs.drive_folder_id);
   if (!folder) {
     throw new Error(
-      `Drive folder ${cs.drive_folder_id} no longer in 1-Pending — has it been moved?`,
+      `Drive folder ${cs.drive_folder_id} not found. Has it been trashed or moved out of the case-studies root?`,
     );
   }
   const spec = await extractFromPendingFolder(folder);
