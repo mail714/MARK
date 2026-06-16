@@ -3,6 +3,7 @@ import { getCaseStudyPhotos } from '@/lib/case-study-photos';
 import { moveFolderToPublished } from '@/lib/drive/move';
 import { importImageFromUrl } from '@/lib/wix/media';
 import { deleteWixItem, publishCaseStudy as publishToWix } from '@/lib/wix/cms';
+import { linkRelatedCaseStudies } from '@/lib/wix/related';
 import type { CaseStudy } from '@/lib/types';
 
 // Delete the Wix item (if any) and clear all Wix linkage on the case_studies
@@ -152,6 +153,28 @@ export async function publishCaseStudy(id: string): Promise<{ wixItemId: string;
       })
       .eq('id', id);
     if (updateErr) throw new Error(`Failed to save publish state: ${updateErr.message}`);
+
+    // Non-fatal: link the new item into the Related Case Studies graph (both
+    // directions, so it shows 4 related boards AND appears as one on theirs).
+    // Failures here must NOT unwind the publish.
+    try {
+      const linked = await linkRelatedCaseStudies(
+        result.id,
+        cs.club_types,
+        cs.h1_page_title ?? cs.customer_name ?? '',
+      );
+      if (linked.linkedTo.length === 0) {
+        console.warn(
+          `Related-case-study linking: no mates in cluster ${linked.cluster} for ${result.id}.`,
+        );
+      }
+    } catch (linkErr) {
+      const linkMessage = linkErr instanceof Error ? linkErr.message : String(linkErr);
+      await supabase
+        .from('case_studies')
+        .update({ last_error: `Published OK but related-case-study linking failed: ${linkMessage}` })
+        .eq('id', id);
+    }
 
     // Non-fatal: archive the Drive folder. If this fails the publish is
     // already done — log the issue on the row but don't unwind.
