@@ -7,6 +7,7 @@ import {
 } from '@/lib/case-studies';
 import { GenerateButton } from '@/components/case-studies/GenerateButton';
 import { DeleteButton } from '@/components/case-studies/DeleteButton';
+import { UploadDialog } from '@/components/case-studies/UploadDialog';
 
 export const dynamic = 'force-dynamic';
 
@@ -278,9 +279,12 @@ export default async function CaseStudiesPage({
       ) : null}
 
       <section className="space-y-3">
-        <h2 className="text-sm font-semibold uppercase tracking-wider text-neutral-500">
-          Pending — Drive <code className="text-xs">1-Pending</code>
-        </h2>
+        <div className="flex items-end justify-between gap-3">
+          <h2 className="text-sm font-semibold uppercase tracking-wider text-neutral-500">
+            Pending — Drive <code className="text-xs">1-Pending</code>
+          </h2>
+          <UploadDialog />
+        </div>
         {folders.length === 0 ? (
           <div className="rounded-lg border border-dashed border-neutral-300 bg-white p-12 text-center text-sm text-neutral-500">
             No folders in <code>1-Pending</code>. Drop a job folder in Drive and refresh.
