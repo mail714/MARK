@@ -10,6 +10,10 @@ export function RegenerateButton({ driveFolderId }: { driveFolderId: string }) {
   const [, startTransition] = useTransition();
 
   async function go() {
+    const ok = window.confirm(
+      'Regenerating will re-extract the spec from the PDFs and re-run the AI copy draft from scratch. Any inline edits you have made to the spec or copy fields will be overwritten. Continue?',
+    );
+    if (!ok) return;
     setBusy(true);
     setError(null);
     try {
@@ -38,7 +42,7 @@ export function RegenerateButton({ driveFolderId }: { driveFolderId: string }) {
         disabled={busy}
         className="rounded-md border border-neutral-300 bg-white px-3 py-1.5 text-xs font-medium text-neutral-700 hover:bg-neutral-50 disabled:cursor-wait disabled:text-neutral-400"
       >
-        {busy ? 'Regenerating…' : 'Regenerate from PDFs'}
+        {busy ? 'Regenerating…' : 'Regenerate spec + copy'}
       </button>
       {error ? <span className="text-xs text-red-600">{error}</span> : null}
     </div>

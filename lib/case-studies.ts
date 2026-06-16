@@ -176,6 +176,32 @@ export async function generateCaseStudyForFolder(driveFolderId: string): Promise
       .eq('id', caseStudyId);
     if (update.error) throw new Error(`Failed to save extracted spec: ${update.error.message}`);
 
+    // Carry straight on into a fresh AI draft of the 11 copy fields. The
+    // operator's intuition is that Regenerate from PDFs should produce new
+    // content end-to-end; running both passes back-to-back here also means
+    // they don't have to remember a second click. Non-fatal: if the draft
+    // step fails the spec stays saved and the row is flagged via last_error
+    // so the operator can retry via Re-draft copy.
+    try {
+      const fields = await draftCaseStudy(spec, {
+        club_types: spec.clubTypes,
+        customer_name: spec.customerName,
+      });
+      const draftUpdate = await supabase
+        .from('case_studies')
+        .update({ ...fields, last_error: null })
+        .eq('id', caseStudyId);
+      if (draftUpdate.error) {
+        throw new Error(`Failed to save draft copy: ${draftUpdate.error.message}`);
+      }
+    } catch (draftErr) {
+      const draftMessage = draftErr instanceof Error ? draftErr.message : String(draftErr);
+      await supabase
+        .from('case_studies')
+        .update({ last_error: `Spec extracted OK but copy draft failed: ${draftMessage}` })
+        .eq('id', caseStudyId);
+    }
+
     return caseStudyId;
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
