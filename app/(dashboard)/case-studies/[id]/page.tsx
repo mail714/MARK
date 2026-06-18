@@ -112,7 +112,7 @@ export default async function CaseStudyDetailPage({
           <EditableField
             caseStudyId={cs.id}
             field="back_colour"
-            label="Back colour"
+            label="Back colour / wood stain"
             initialValue={cs.back_colour}
             multiline
           />
