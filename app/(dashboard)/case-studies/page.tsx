@@ -8,6 +8,7 @@ import {
 import { GenerateButton } from '@/components/case-studies/GenerateButton';
 import { DeleteButton } from '@/components/case-studies/DeleteButton';
 import { UploadDialog } from '@/components/case-studies/UploadDialog';
+import { ManageFilesDialog } from '@/components/case-studies/ManageFilesDialog';
 
 export const dynamic = 'force-dynamic';
 
@@ -77,6 +78,10 @@ function PendingRow({ folder }: { folder: PendingFolderWithStatus }) {
       </td>
       <td className="px-4 py-3">
         <div className="flex items-center justify-end gap-2">
+          <ManageFilesDialog
+            driveFolderId={folder.id}
+            folderName={folder.name}
+          />
           {cs ? (
             <Link
               href={`/case-studies/${cs.id}`}

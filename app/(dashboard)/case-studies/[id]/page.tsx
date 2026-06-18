@@ -178,26 +178,26 @@ export default async function CaseStudyDetailPage({
             <EditableField
               caseStudyId={cs.id}
               field="h2_design_highlights_title"
-              label="Design highlights H2"
+              label="Middle section 1 — H2"
               initialValue={cs.h2_design_highlights_title}
             />
             <EditableField
               caseStudyId={cs.id}
               field="h2_design_highlights_text"
-              label="Design highlights body (HTML)"
+              label="Middle section 1 — body (HTML)"
               initialValue={cs.h2_design_highlights_text}
               multiline
             />
             <EditableField
               caseStudyId={cs.id}
               field="h2_summary_title"
-              label="Summary H2"
+              label="Middle section 2 — H2"
               initialValue={cs.h2_summary_title}
             />
             <EditableField
               caseStudyId={cs.id}
               field="h2_summary_text"
-              label="Summary body (HTML)"
+              label="Middle section 2 — body (HTML)"
               initialValue={cs.h2_summary_text}
               multiline
             />

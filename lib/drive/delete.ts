@@ -10,3 +10,14 @@ export async function trashFolder(folderId: string): Promise<void> {
     supportsAllDrives: true,
   });
 }
+
+// Trash a single file. Same 30-day restore window applies.
+export async function trashFile(fileId: string): Promise<void> {
+  const drive = getDriveClient();
+  await drive.files.update({
+    fileId,
+    requestBody: { trashed: true },
+    supportsAllDrives: true,
+  });
+}
+

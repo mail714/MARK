@@ -47,12 +47,34 @@ The drafts will be scanned by AI-content detectors before publication. To read a
 - Be specific. Name the year, the headmaster, the building, the deliberate choice the customer made. Specificity reads as human; generality reads as AI.
 - Don't transition smoothly between every paragraph. Real writing has small jumps.
 
-# Structural pattern (consistent across all existing case studies)
+# Structure
 
-- **Introduction**: opens with the customer or their problem, not with us. Establishes what they needed. 120–180 words.
-- **Design Highlights**: the technical / craft section. Specifics in bold inline — material, dimensions, finish, lettering, fixings, layout choices. May include exactly one internal link to a relevant category page. 150–250 words.
-- **Summary**: zooms out — the wider point about this type of project, our experience with similar work, and a soft pitch. 150–250 words.
-- **CTA**: one or two sentences inviting contact.
+The first section (Introduction) and the last section (CTA) are fixed. The two middle H2 sections are flexible — they don't have to be "Design Highlights" and "Summary". Pick whichever two angles best fit THIS job so case studies don't all read the same shape. Match the H2 title to whatever the content actually covers.
+
+Fixed sections:
+- **Introduction**: opens with the customer or their problem, not with us. Establishes what they needed. 120–180 words. Always present, always first.
+- **CTA**: one or two sentences inviting contact. Always present, always last.
+
+Middle two H2 sections — pick two distinct angles from this menu (or invent a sensible one of your own that fits this specific job):
+
+- Technical / craft details — material, dimensions, finish, lettering, fixings, layout choices. Title example: "Materials and Finish", "How the Boards Were Built", "Design and Specification".
+- The customer's challenge — their existing setup, what wasn't working, the decision they had to make. Title example: "What the Club Needed", "Starting From an Aging Display", "The Decision to Switch to Acrylic".
+- Process / collaboration — how the work unfolded, how the customer was involved, design proofs, sign-off, how data was assembled. Title example: "Working Through 22 Boards", "Mapping the History", "From First Draft to Install Day".
+- Installation / delivery — how the boards reached the wall, fitting, timing, on-site coordination. Title example: "Installation in a Single Day", "Delivering a Full Set".
+- Sector context — what's distinctive about this kind of work for that sector, what the boards do for the community. Title example: "Why Cricket Clubs Use Honours Boards", "Recording a School's History".
+- Future-proofing / maintenance / updates — how the customer adds names year-on-year, how acrylic holds up over time, the annual update routine. Title example: "Built to Be Updated Each Year", "Designed for the Long Term".
+- Backstory / heritage — the customer's history, what's already on display elsewhere in the building, who the prize commemorates. Title example: "A Tribute to Mr [name]", "Joining an Existing Tradition".
+- A specific choice and why — the one decision that defined this job (e.g. why gold-on-black vs. silver-on-blue, why solid oak vs. veneered MDF). Title example: "Why Gold on Black", "Choosing Stand-Off Fixings".
+
+Hard rules for the middle two:
+- Pick TWO genuinely distinct angles. Don't pick "Materials and Finish" plus "How the Boards Were Built" — those overlap.
+- The H2 title must literally describe what the body underneath covers. No clickbait, no abstractions.
+- Total word count across the two middle sections: 300–500 words combined, with the body weighted toward whichever section has more to say.
+- Each middle body is HTML, same formatting rules as the rest.
+- Inline specs still go in \`<strong>\` wherever they appear.
+- Internal links still belong in this section (1–3 total across the case study, only the listed URLs).
+
+Aim for genuine variety. If you've already implicitly decided to do "design + summary" for every job you've ever drafted, deliberately choose a different pair for THIS one.
 
 # Recurring opening patterns (draw from, do not copy)
 

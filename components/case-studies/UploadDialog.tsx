@@ -1,7 +1,8 @@
 'use client';
 
 import { useRouter } from 'next/navigation';
-import { useRef, useState, useTransition, type DragEvent } from 'react';
+import { useMemo, useRef, useState, useTransition, type DragEvent } from 'react';
+import { classifyForPreview, roleLabel, roleTone } from '@/lib/classify-files';
 
 const ACCEPTED_EXT = ['.pdf', '.jpg', '.jpeg', '.png', '.webp', '.heic', '.heif'];
 const ACCEPTED_MIME = /^(application\/pdf|image\/(jpeg|png|webp|heic|heif))$/;
@@ -10,6 +11,20 @@ function fmtBytes(n: number) {
   if (n < 1024) return `${n} B`;
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(0)} KB`;
   return `${(n / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function Status({ ok, label }: { ok: boolean; label: string }) {
+  return (
+    <span
+      className={`rounded-full px-2 py-0.5 text-[10px] font-medium ring-1 ${
+        ok
+          ? 'bg-emerald-50 text-emerald-700 ring-emerald-200'
+          : 'bg-neutral-100 text-neutral-500 ring-neutral-200'
+      }`}
+    >
+      {label}
+    </span>
+  );
 }
 
 export function UploadDialog() {
@@ -97,6 +112,20 @@ export function UploadDialog() {
   const pdfCount = files.filter((f) => f.type === 'application/pdf' || f.name.toLowerCase().endsWith('.pdf')).length;
   const photoCount = files.length - pdfCount;
   const totalBytes = files.reduce((n, f) => n + f.size, 0);
+  const classified = useMemo(
+    () => classifyForPreview(files.map((f) => ({ name: f.name, size: f.size, type: f.type }))),
+    [files],
+  );
+  const previewByName = useMemo(() => {
+    const m = new Map<string, (typeof classified)[number]>();
+    for (const c of classified) m.set(`${c.name}-${c.size}`, c);
+    return m;
+  }, [classified]);
+  const summary = useMemo(() => {
+    const tallies = { 'sales-order': 0, proof: 0, photo: 0, unidentified: 0 };
+    for (const c of classified) tallies[c.role]++;
+    return tallies;
+  }, [classified]);
 
   return (
     <>
@@ -172,33 +201,58 @@ export function UploadDialog() {
             </div>
 
             {files.length > 0 ? (
-              <div className="mt-3 max-h-44 overflow-y-auto rounded border border-neutral-200">
+              <div className="mt-3 max-h-56 overflow-y-auto rounded border border-neutral-200">
                 <ul className="divide-y divide-neutral-200">
-                  {files.map((f) => (
-                    <li
-                      key={`${f.name}-${f.size}`}
-                      className="flex items-center justify-between px-3 py-1.5 text-xs"
-                    >
-                      <span className="truncate">{f.name}</span>
-                      <span className="ml-2 flex items-center gap-3 whitespace-nowrap text-neutral-500">
-                        <span>{fmtBytes(f.size)}</span>
-                        <button
-                          type="button"
-                          onClick={() => removeFile(f.name, f.size)}
-                          disabled={busy}
-                          className="text-red-600 hover:underline"
-                        >
-                          remove
-                        </button>
-                      </span>
-                    </li>
-                  ))}
+                  {files.map((f) => {
+                    const p = previewByName.get(`${f.name}-${f.size}`);
+                    return (
+                      <li
+                        key={`${f.name}-${f.size}`}
+                        className="flex items-center justify-between gap-2 px-3 py-1.5 text-xs"
+                      >
+                        <div className="flex min-w-0 items-center gap-2">
+                          {p ? (
+                            <span
+                              className={`inline-flex shrink-0 items-center rounded-full px-2 py-0.5 text-[10px] font-medium ring-1 ${roleTone(p.role)}`}
+                            >
+                              {roleLabel(p.role)}
+                            </span>
+                          ) : null}
+                          <span className="truncate">{f.name}</span>
+                        </div>
+                        <span className="flex items-center gap-3 whitespace-nowrap text-neutral-500">
+                          <span>{fmtBytes(f.size)}</span>
+                          <button
+                            type="button"
+                            onClick={() => removeFile(f.name, f.size)}
+                            disabled={busy}
+                            className="text-red-600 hover:underline"
+                          >
+                            remove
+                          </button>
+                        </span>
+                      </li>
+                    );
+                  })}
                 </ul>
               </div>
             ) : null}
 
-            <div className="mt-2 text-xs text-neutral-500">
-              {pdfCount} PDF{pdfCount === 1 ? '' : 's'} · {photoCount} photo{photoCount === 1 ? '' : 's'} · {fmtBytes(totalBytes)}
+            <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-neutral-500">
+              <span>
+                {pdfCount} PDF{pdfCount === 1 ? '' : 's'} · {photoCount} photo{photoCount === 1 ? '' : 's'} · {fmtBytes(totalBytes)}
+              </span>
+              {files.length > 0 ? (
+                <span className="flex items-center gap-2">
+                  <Status ok={summary['sales-order'] === 1} label={summary['sales-order'] === 1 ? 'Sales order ✓' : 'Sales order missing'} />
+                  <Status ok={summary.proof === 1} label={summary.proof === 1 ? 'Proof ✓' : 'Proof missing'} />
+                  {summary.unidentified > 0 ? (
+                    <span className="rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-medium text-amber-800 ring-1 ring-amber-200">
+                      {summary.unidentified} unidentified PDF{summary.unidentified === 1 ? '' : 's'}
+                    </span>
+                  ) : null}
+                </span>
+              ) : null}
             </div>
           </div>
 

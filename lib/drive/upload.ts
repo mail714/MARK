@@ -59,8 +59,56 @@ export type CreateCaseStudyFolderResult = {
   photoIds: string[];
 };
 
-// Create a new job folder under 1-Pending and upload the given files. PDFs go
-// to the folder root, images go into a /photos subfolder.
+// Add files to an existing job folder. PDFs go to the folder root; images go
+// to a 'photos' subfolder (created if it doesn't exist yet).
+export async function addFilesToFolder(args: {
+  folderId: string;
+  files: UploadedFile[];
+}): Promise<{ pdfIds: string[]; photoIds: string[] }> {
+  const drive = getDriveClient();
+  const meta = await drive.files.get({
+    fileId: args.folderId,
+    fields: 'id, name, mimeType, trashed',
+    supportsAllDrives: true,
+  }).catch(() => null);
+  if (!meta?.data?.id || meta.data.trashed) {
+    throw new Error(`Folder ${args.folderId} not found.`);
+  }
+  if (meta.data.mimeType !== FOLDER_MIME) {
+    throw new Error(`${args.folderId} is not a folder.`);
+  }
+
+  const pdfs = args.files.filter((f) => f.mimeType === 'application/pdf');
+  const photos = args.files.filter((f) => f.mimeType.startsWith('image/'));
+
+  const pdfIds: string[] = [];
+  for (const pdf of pdfs) {
+    pdfIds.push(await uploadFileToFolder({
+      parentId: args.folderId,
+      name: pdf.name,
+      mimeType: pdf.mimeType,
+      body: pdf.body,
+    }));
+  }
+
+  let photoIds: string[] = [];
+  if (photos.length > 0) {
+    let photosFolderId = await findChildFolderByName(args.folderId, 'photos');
+    if (!photosFolderId) {
+      photosFolderId = await createFolder(args.folderId, 'photos');
+    }
+    for (const photo of photos) {
+      photoIds.push(await uploadFileToFolder({
+        parentId: photosFolderId,
+        name: photo.name,
+        mimeType: photo.mimeType,
+        body: photo.body,
+      }));
+    }
+  }
+
+  return { pdfIds, photoIds };
+}
 export async function createCaseStudyFolder(args: {
   rootFolderId: string;
   folderName: string;
