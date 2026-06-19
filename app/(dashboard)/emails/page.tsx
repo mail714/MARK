@@ -1,5 +1,8 @@
+import Link from 'next/link';
 import { getAddressBooks } from '@/lib/email/address-books';
+import { listBrands } from '@/lib/brands';
 import { SyncAddressBooksButton } from '@/components/email/SyncAddressBooksButton';
+import { AddressBookTagInputs } from '@/components/email/AddressBookTagInputs';
 
 export const dynamic = 'force-dynamic';
 
@@ -16,12 +19,14 @@ function fmtDate(iso?: string | null) {
 
 export default async function EmailsPage() {
   let books: Awaited<ReturnType<typeof getAddressBooks>> = [];
+  let brands: Awaited<ReturnType<typeof listBrands>> = [];
   let error: string | null = null;
   try {
-    books = await getAddressBooks();
+    [books, brands] = await Promise.all([getAddressBooks(), listBrands()]);
   } catch (err) {
     error = err instanceof Error ? err.message : String(err);
   }
+  const brandsBare = brands.map((b) => ({ id: b.id, slug: b.slug, name: b.name }));
 
   return (
     <div className="space-y-10">
@@ -76,8 +81,12 @@ export default async function EmailsPage() {
                     <td className="px-4 py-3 text-sm font-medium text-neutral-900">{b.name}</td>
                     <td className="px-4 py-3 text-sm text-neutral-600">{b.contact_count ?? '—'}</td>
                     <td className="px-4 py-3 text-sm text-neutral-500">{b.visibility ?? '—'}</td>
-                    <td className="px-4 py-3 text-sm text-neutral-500">{b.brand_id ? 'Set' : <span className="text-neutral-400">Not set</span>}</td>
-                    <td className="px-4 py-3 text-sm text-neutral-500">{b.sector ?? <span className="text-neutral-400">Not set</span>}</td>
+                    <AddressBookTagInputs
+                      addressBookId={b.id}
+                      brands={brandsBare}
+                      initialBrandId={b.brand_id}
+                      initialSector={b.sector}
+                    />
                     <td className="px-4 py-3 text-sm text-neutral-500">{fmtDate(b.last_synced_at)}</td>
                   </tr>
                 ))}
@@ -87,15 +96,27 @@ export default async function EmailsPage() {
         )}
       </section>
 
-      <section className="rounded-lg border border-dashed border-neutral-300 bg-white p-6">
-        <h2 className="text-sm font-semibold uppercase tracking-wider text-neutral-500">
-          Campaigns
-        </h2>
-        <p className="mt-2 text-sm text-neutral-500">
-          Coming in Phase B — AI-drafted subject + HTML body, voice-grounded
-          against your past dotdigital sends, with pre-flight checks before
-          pushing to dotdigital as a draft.
-        </p>
+      <section className="space-y-3">
+        <div className="flex items-end justify-between gap-3">
+          <div>
+            <h2 className="text-sm font-semibold uppercase tracking-wider text-neutral-500">
+              Campaigns
+            </h2>
+            <p className="mt-1 text-xs text-neutral-500">
+              Drafts authored in MARK. Approved drafts get pushed to dotdigital
+              ready to send.
+            </p>
+          </div>
+          <Link
+            href="/emails/campaigns"
+            className="rounded-md border border-neutral-300 bg-white px-3 py-1.5 text-xs font-medium text-neutral-700 hover:bg-neutral-50"
+          >
+            All campaigns →
+          </Link>
+        </div>
+        <div className="rounded-lg border border-dashed border-neutral-300 bg-white p-6 text-sm text-neutral-500">
+          Manage drafts on the <Link href="/emails/campaigns" className="text-neutral-700 underline-offset-2 hover:underline">campaigns page</Link>.
+        </div>
       </section>
 
       <section className="rounded-lg border border-dashed border-neutral-300 bg-white p-6">

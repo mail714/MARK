@@ -18,3 +18,8 @@ export async function getBrandBySlug(slug: string): Promise<Brand> {
   if (!b) throw new Error(`Brand not found: ${slug}`);
   return b;
 }
+
+export async function listBrands(): Promise<Brand[]> {
+  if (!cache) cache = await loadBrands();
+  return Array.from(cache.values()).sort((a, b) => a.name.localeCompare(b.name));
+}

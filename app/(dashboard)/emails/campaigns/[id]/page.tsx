@@ -1,0 +1,155 @@
+import Link from 'next/link';
+import { notFound } from 'next/navigation';
+import { getCampaign } from '@/lib/email/campaigns';
+import { getAddressBooks } from '@/lib/email/address-books';
+import { listBrands } from '@/lib/brands';
+import { CampaignBriefForm } from '@/components/email/CampaignBriefForm';
+import { DraftEmailButton } from '@/components/email/DraftEmailButton';
+import { EditableCampaignField } from '@/components/email/EditableCampaignField';
+import { EmailPreview } from '@/components/email/EmailPreview';
+
+export const dynamic = 'force-dynamic';
+
+const STATUS_LABEL: Record<string, { label: string; tone: string }> = {
+  draft: { label: 'Draft', tone: 'bg-amber-50 text-amber-800 ring-amber-200' },
+  approved: { label: 'Approved', tone: 'bg-emerald-50 text-emerald-800 ring-emerald-200' },
+  pushed: { label: 'Pushed', tone: 'bg-emerald-50 text-emerald-800 ring-emerald-200' },
+  failed: { label: 'Failed', tone: 'bg-red-50 text-red-700 ring-red-200' },
+};
+
+export default async function CampaignDetailPage({
+  params,
+}: {
+  params: Promise<{ id: string }>;
+}) {
+  const { id } = await params;
+  const [campaign, books, brands] = await Promise.all([
+    getCampaign(id),
+    getAddressBooks(),
+    listBrands(),
+  ]);
+  if (!campaign) notFound();
+
+  const status = STATUS_LABEL[campaign.status] ?? STATUS_LABEL.draft;
+  const brandsBare = brands.map((b) => ({ id: b.id, slug: b.slug, name: b.name }));
+  const booksBare = books.map((b) => ({
+    dotdigital_id: b.dotdigital_id,
+    name: b.name,
+    contact_count: b.contact_count,
+  }));
+
+  return (
+    <div className="space-y-8">
+      <header className="space-y-3">
+        <div>
+          <Link href="/emails/campaigns" className="text-xs text-neutral-500 hover:text-neutral-700">
+            ← All campaigns
+          </Link>
+        </div>
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <h1 className="text-2xl font-semibold tracking-tight">
+              {campaign.internal_name ?? campaign.subject ?? '(untitled)'}
+            </h1>
+            {campaign.subject ? (
+              <p className="mt-1 text-sm text-neutral-600">{campaign.subject}</p>
+            ) : null}
+          </div>
+          <span
+            className={`inline-flex items-center rounded-full px-3 py-1 text-xs font-medium ring-1 ${status.tone}`}
+          >
+            {status.label}
+          </span>
+        </div>
+        {campaign.last_error ? (
+          <div className="rounded-md border border-red-200 bg-red-50 p-3 text-xs font-mono text-red-800">
+            {campaign.last_error}
+          </div>
+        ) : null}
+      </header>
+
+      <section className="space-y-3">
+        <h2 className="text-sm font-semibold uppercase tracking-wider text-neutral-500">Brief</h2>
+        <p className="text-xs text-neutral-500">
+          Choose the brand, the sector, the campaign type and the audience books, and write a short
+          brief of what the email should cover. The AI drafter reads all of this.
+        </p>
+        <CampaignBriefForm
+          campaignId={campaign.id}
+          brands={brandsBare}
+          addressBooks={booksBare}
+          initial={{
+            internal_name: campaign.internal_name,
+            brand_id: campaign.brand_id,
+            sector: campaign.sector,
+            campaign_type: campaign.campaign_type,
+            intent: campaign.intent,
+            address_book_ids: campaign.address_book_ids,
+          }}
+        />
+      </section>
+
+      <section className="space-y-3">
+        <div className="flex items-end justify-between">
+          <div>
+            <h2 className="text-sm font-semibold uppercase tracking-wider text-neutral-500">
+              Drafted copy
+            </h2>
+            <p className="mt-1 text-xs text-neutral-500">
+              Subject and preheader sit at the top of the inbox. Body is editable HTML —
+              preview renders to the right.
+            </p>
+          </div>
+          <DraftEmailButton campaignId={campaign.id} hasDraft={!!campaign.html_body} />
+        </div>
+
+        <div className="grid gap-4" key={`copy-${campaign.updated_at}`}>
+          <EditableCampaignField
+            campaignId={campaign.id}
+            field="subject"
+            label="Subject line"
+            initialValue={campaign.subject}
+            helper="30–60 chars"
+            placeholder="The subject line readers see in their inbox"
+          />
+          <EditableCampaignField
+            campaignId={campaign.id}
+            field="preheader"
+            label="Preheader"
+            initialValue={campaign.preheader}
+            helper="80–110 chars — preview text under the subject"
+            placeholder="Short preview text — continues the subject, doesn't repeat it"
+          />
+          <div className="grid gap-4 lg:grid-cols-2">
+            <EditableCampaignField
+              campaignId={campaign.id}
+              field="html_body"
+              label="HTML body"
+              initialValue={campaign.html_body}
+              multiline
+              rows={20}
+              helper="Inline styles — email-safe markup"
+              placeholder="<p style=…>…</p>"
+            />
+            <div className="space-y-1">
+              <div className="text-xs font-medium uppercase tracking-wider text-neutral-500">
+                Preview
+              </div>
+              <EmailPreview html={campaign.html_body} />
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section className="rounded-lg border border-dashed border-neutral-300 bg-white p-6">
+        <h2 className="text-sm font-semibold uppercase tracking-wider text-neutral-500">
+          Push to dotdigital
+        </h2>
+        <p className="mt-2 text-sm text-neutral-500">
+          Coming in the next push — pre-flight checks (subject length, link count, spam triggers),
+          then push the campaign to dotdigital as a ready-to-send draft.
+        </p>
+      </section>
+    </div>
+  );
+}
