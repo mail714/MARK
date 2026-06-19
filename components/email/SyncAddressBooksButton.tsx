@@ -20,7 +20,9 @@ export function SyncAddressBooksButton() {
       if (!res.ok) {
         throw new Error(data.error ?? `Sync failed (${res.status})`);
       }
-      setStatus(`${data.fetched} fetched • ${data.inserted} new • ${data.updated} updated`);
+      setStatus(
+        `${data.fetched} fetched • ${data.inserted} new • ${data.updated} updated • ${data.removed} removed`,
+      );
       startTransition(() => router.refresh());
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));

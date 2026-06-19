@@ -23,21 +23,24 @@ export async function getAddressBooks(): Promise<AddressBookRow[]> {
 }
 
 // Pull the live list of address books from dotdigital and upsert them locally.
-// Returns counts so the UI can show what changed in the sync.
+// Anything in MARK whose dotdigital_id is no longer returned by the live fetch
+// is treated as an orphan and removed too — so renames work via the upsert,
+// new books are inserted, and deleted books vanish from MARK on the next sync.
+// Returns counts so the UI can show what changed.
 export async function syncAddressBooks(): Promise<{
   fetched: number;
   inserted: number;
   updated: number;
+  removed: number;
 }> {
   const live = await listAllAddressBooks();
   const supabase = createAdminClient();
 
   // Read existing dotdigital_ids so we can split inserts vs updates for the
-  // returned counts. Single round-trip.
-  const ids = live.map((b) => b.id);
-  const { data: existing, error: lookupErr } = ids.length
-    ? await supabase.from('address_books').select('dotdigital_id').in('dotdigital_id', ids)
-    : { data: [] as { dotdigital_id: number }[], error: null };
+  // returned counts AND know which local rows are orphans after the upsert.
+  const { data: existing, error: lookupErr } = await supabase
+    .from('address_books')
+    .select('id, dotdigital_id');
   if (lookupErr) throw new Error(`Failed to read existing address books: ${lookupErr.message}`);
   const existingIds = new Set((existing ?? []).map((r) => r.dotdigital_id));
 
@@ -61,7 +64,28 @@ export async function syncAddressBooks(): Promise<{
     if (existingIds.has(b.id)) updated++;
     else inserted++;
   }
-  return { fetched: live.length, inserted, updated };
+
+  // Orphan cleanup. Safety belt: refuse to wipe everything if dotdigital
+  // returned zero books — that's almost always an API hiccup, not a real
+  // empty account. The operator can still hand-delete a row in Supabase if
+  // they ever genuinely want a clean slate.
+  let removed = 0;
+  if (live.length > 0) {
+    const liveIds = new Set(live.map((b) => b.id));
+    const orphanRowIds = (existing ?? [])
+      .filter((r) => !liveIds.has(r.dotdigital_id))
+      .map((r) => r.id as string);
+    if (orphanRowIds.length) {
+      const { error } = await supabase
+        .from('address_books')
+        .delete()
+        .in('id', orphanRowIds);
+      if (error) throw new Error(`Failed to remove orphan address books: ${error.message}`);
+      removed = orphanRowIds.length;
+    }
+  }
+
+  return { fetched: live.length, inserted, updated, removed };
 }
 
 export async function updateAddressBookTags(
