@@ -82,7 +82,11 @@ export async function listAllImageSectors(filter?: { brandId?: string | null }):
   for (const r of (data as { sector: string | null }[] | null) ?? []) {
     if (r.sector) set.add(r.sector);
   }
-  return Array.from(set).sort();
+  // Case-insensitive sort so 'shop signs' lands next to 'Schools' rather than
+  // after every uppercase entry the way default JS string sort would put it.
+  return Array.from(set).sort((a, b) =>
+    a.localeCompare(b, 'en', { sensitivity: 'base' }),
+  );
 }
 
 // Pull every case-study image from the Honours Boards Wix collection and upsert
