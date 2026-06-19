@@ -119,6 +119,26 @@ export default async function EmailsPage() {
         </div>
       </section>
 
+      <section className="space-y-3">
+        <div className="flex items-end justify-between gap-3">
+          <div>
+            <h2 className="text-sm font-semibold uppercase tracking-wider text-neutral-500">
+              Image library
+            </h2>
+            <p className="mt-1 text-xs text-neutral-500">
+              Marketing-grade images used as hero shots in campaigns. Synced from
+              Honours Boards Wix case studies.
+            </p>
+          </div>
+          <Link
+            href="/emails/images"
+            className="rounded-md border border-neutral-300 bg-white px-3 py-1.5 text-xs font-medium text-neutral-700 hover:bg-neutral-50"
+          >
+            Open library →
+          </Link>
+        </div>
+      </section>
+
       <section className="rounded-lg border border-dashed border-neutral-300 bg-white p-6">
         <h2 className="text-sm font-semibold uppercase tracking-wider text-neutral-500">
           Reporting

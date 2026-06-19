@@ -20,6 +20,8 @@ export type EmailDraftContext = {
   campaignType: 'newsletter' | 'promotional' | 'announcement' | null;
   intent: string | null;
   audienceDescription: string;
+  heroImageUrl: string | null;
+  heroImageAlt: string | null;
 };
 
 export const SYSTEM_PROMPT = `You are a senior copywriter drafting marketing emails for one of Signet's three brands: Honours Boards (honours-boards.co.uk), Signet Signs (signetsigns.co.uk) or Signet Play (signet-play.co.uk).
@@ -140,12 +142,13 @@ Footer paragraph (always include; do NOT add an unsubscribe link — dotdigital 
   Signet Signs Ltd, Unit 3 Windmill Business Park, Clevedon, BS21 6SR. <a href="https://[brand-domain]" style="color:#777; text-decoration:underline;">Visit the website</a>
 </p>
 
-# Image placeholders
+# Images
 
-You don't know what images the operator has on hand. For hero or inline images, use a placeholder URL with this exact pattern so the operator can find-and-replace before pushing:
-  src="https://CHANGE-ME.example.com/<short-descriptor>.jpg"
+The brief tells you the exact hero image URL and alt text to use. Use them verbatim in the hero \`<img>\` tag. Do not invent your own image URLs and do not use placeholder URLs like CHANGE-ME.example.com.
 
-Always write a useful alt text describing what the image should show — that's what the operator uses to decide what to upload.
+If the brief says NO HERO IMAGE, omit the hero entirely and lead with the opening paragraph instead.
+
+For supporting inline images (rare), the same rule applies: the brief will list available image URLs or say none are available. Do not invent.
 
 # Brand styling cues
 
@@ -222,6 +225,19 @@ export async function buildUserMessage(ctx: EmailDraftContext): Promise<string> 
   if (ctx.sector) lines.push(`Sector / audience: ${ctx.sector}`);
   if (ctx.campaignType) lines.push(`Campaign type: ${ctx.campaignType}`);
   if (ctx.audienceDescription) lines.push(`Audience books selected: ${ctx.audienceDescription}`);
+
+  lines.push('');
+  if (ctx.heroImageUrl) {
+    lines.push(
+      `Hero image URL (use this exact URL in the hero <img> src): ${ctx.heroImageUrl}`,
+    );
+    lines.push(
+      `Hero image alt text (use this exact alt text in the hero <img> alt): ${ctx.heroImageAlt ?? ''}`,
+    );
+  } else {
+    lines.push('NO HERO IMAGE: skip the hero entirely. Open with the first paragraph.');
+  }
+
   if (ctx.intent) {
     lines.push('', `Intent / what to write about:`, ctx.intent);
   } else {

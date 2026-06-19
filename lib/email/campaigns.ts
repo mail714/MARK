@@ -15,6 +15,8 @@ export type EmailCampaign = {
   subject: string | null;
   preheader: string | null;
   html_body: string | null;
+  hero_image_url: string | null;
+  hero_image_alt: string | null;
   dotdigital_campaign_id: number | null;
   pushed_at: string | null;
   last_error: string | null;
@@ -86,6 +88,8 @@ const EDITABLE_FIELDS = [
   'subject',
   'preheader',
   'html_body',
+  'hero_image_url',
+  'hero_image_alt',
   'brand_id',
   'status',
 ] as const;

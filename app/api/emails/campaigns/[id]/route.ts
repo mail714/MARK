@@ -15,6 +15,8 @@ const EDITABLE_FIELDS = [
   'subject',
   'preheader',
   'html_body',
+  'hero_image_url',
+  'hero_image_alt',
   'brand_id',
   'status',
 ] as const;

@@ -7,6 +7,7 @@ import { CampaignBriefForm } from '@/components/email/CampaignBriefForm';
 import { DraftEmailButton } from '@/components/email/DraftEmailButton';
 import { EditableCampaignField } from '@/components/email/EditableCampaignField';
 import { EmailPreview } from '@/components/email/EmailPreview';
+import { HeroImagePicker } from '@/components/email/HeroImagePicker';
 
 export const dynamic = 'force-dynamic';
 
@@ -86,6 +87,12 @@ export default async function CampaignDetailPage({
             intent: campaign.intent,
             address_book_ids: campaign.address_book_ids,
           }}
+        />
+        <HeroImagePicker
+          campaignId={campaign.id}
+          selectedUrl={campaign.hero_image_url}
+          selectedAlt={campaign.hero_image_alt}
+          defaultSector={campaign.sector}
         />
       </section>
 
