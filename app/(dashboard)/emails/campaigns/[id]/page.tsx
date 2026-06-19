@@ -8,6 +8,9 @@ import { DraftEmailButton } from '@/components/email/DraftEmailButton';
 import { EditableCampaignField } from '@/components/email/EditableCampaignField';
 import { EmailPreview } from '@/components/email/EmailPreview';
 import { HeroImagePicker } from '@/components/email/HeroImagePicker';
+import { PreflightPanel } from '@/components/email/PreflightPanel';
+import { PushButton } from '@/components/email/PushButton';
+import { canPush, runPreflight } from '@/lib/email/preflight';
 
 export const dynamic = 'force-dynamic';
 
@@ -148,14 +151,27 @@ export default async function CampaignDetailPage({
         </div>
       </section>
 
-      <section className="rounded-lg border border-dashed border-neutral-300 bg-white p-6">
-        <h2 className="text-sm font-semibold uppercase tracking-wider text-neutral-500">
-          Push to dotdigital
-        </h2>
-        <p className="mt-2 text-sm text-neutral-500">
-          Coming in the next push — pre-flight checks (subject length, link count, spam triggers),
-          then push the campaign to dotdigital as a ready-to-send draft.
-        </p>
+      <section className="space-y-3">
+        <div className="flex items-end justify-between gap-3">
+          <div>
+            <h2 className="text-sm font-semibold uppercase tracking-wider text-neutral-500">
+              Push to dotdigital
+            </h2>
+            <p className="mt-1 text-xs text-neutral-500">
+              Pre-flight runs subject / preheader / body / spam / audience
+              checks. Once everything's green or amber, pushing creates a
+              draft campaign in dotdigital where you do final review and
+              schedule the send.
+            </p>
+          </div>
+          <PushButton
+            campaignId={campaign.id}
+            canPush={canPush(runPreflight(campaign))}
+            status={campaign.status}
+            dotdigitalCampaignId={campaign.dotdigital_campaign_id}
+          />
+        </div>
+        <PreflightPanel checks={runPreflight(campaign)} />
       </section>
     </div>
   );
