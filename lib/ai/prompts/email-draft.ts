@@ -66,22 +66,90 @@ Preheader (the inbox preview text shown after the subject):
 - Real content, not "View in browser" filler.
 
 Body:
-- ONE clear primary call to action. Multiple CTAs split attention.
-- Mobile-first: short paragraphs, scannable structure, hyperlinked text rather than buttons-only.
+- ONE clear primary call to action, rendered as a styled button. An optional secondary text link below is fine.
+- Mobile-first: short paragraphs, scannable structure, generous white space.
 - Lead with the value to the reader, not the brand's news.
 - Sign off with a real name where natural.
 - 150-300 words for promotional / announcement, 200-400 for newsletter.
 
 # HTML formatting
 
-This HTML goes into dotdigital. Use simple, email-safe markup. Inline styles for anything visual. No external CSS. No JavaScript. No flexbox / grid.
+This HTML goes into dotdigital. Use email-safe markup — inline styles only, no external CSS, no JavaScript, no flexbox or grid. Table-based layout where structure is needed (Outlook desktop still requires it).
 
-- Paragraphs: <p style="margin: 0 0 12px 0; font-family: Arial, sans-serif; font-size: 15px; line-height: 1.5; color: #222;">…</p>
-- Links: <a href="https://…" style="color: #2a4ea0; text-decoration: underline;">anchor text</a>
-- Bold: <strong>…</strong> inside paragraphs.
-- Lists: <ul style="margin: 0 0 12px 20px; font-family: Arial, sans-serif; font-size: 15px; line-height: 1.5; color: #222;"><li>…</li></ul>
-- Primary CTA: a clearly-visible inline link with the same anchor styling, not a separate button. Example: <p style="margin: 0 0 12px 0; font-family: Arial, sans-serif; font-size: 15px; line-height: 1.5; color: #222;"><a href="…" style="color: #2a4ea0; text-decoration: underline;"><strong>Read the full case study →</strong></a></p>
-- No images, no tables (unless asked). Keep it text-led for both deliverability and reading.
+Structure depends on campaign type:
+
+NEWSLETTER:
+- Hero image at the top (full-width 600px placeholder)
+- Two or three sections each with a small H2 heading + a paragraph + inline link
+- One primary CTA button to the brand website
+- Sign-off paragraph
+
+PROMOTIONAL:
+- Hero image at the top
+- One strong opening paragraph
+- One supporting paragraph
+- One clearly-visible CTA button
+- Optional sub-line with a softer secondary link
+
+ANNOUNCEMENT:
+- Short and sharp — hero image optional
+- 1-2 paragraphs of news
+- Single CTA button
+
+# Email-safe HTML patterns to use
+
+Container wrapper (always wrap the entire body in this):
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#f5f5f5;">
+  <tr><td align="center" style="padding:24px 12px;">
+    <table role="presentation" width="600" cellpadding="0" cellspacing="0" border="0" style="background:#ffffff; max-width:600px;">
+      <tr><td style="padding:24px;">
+
+      [content goes here]
+
+      </td></tr>
+    </table>
+  </td></tr>
+</table>
+
+Hero image (use a placeholder URL with an obvious CHANGE-ME marker so the operator can spot it and swap in the real image before pushing):
+<img src="https://CHANGE-ME.example.com/hero.jpg" alt="[descriptive alt text]" width="600" style="display:block; width:100%; max-width:600px; height:auto; border:0;" />
+
+H2 section heading:
+<h2 style="margin:24px 0 8px 0; font-family: Arial, sans-serif; font-size: 20px; line-height: 1.3; color:#222;">…</h2>
+
+Paragraph:
+<p style="margin: 0 0 12px 0; font-family: Arial, sans-serif; font-size: 15px; line-height: 1.5; color:#222;">…</p>
+
+Inline link:
+<a href="https://…" style="color: #2a4ea0; text-decoration: underline;">anchor text</a>
+
+Bold inside paragraphs:
+<strong>…</strong>
+
+Primary CTA button (table-based so it survives Outlook):
+<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin: 16px 0;">
+  <tr>
+    <td style="background:#2a4ea0; border-radius: 4px;">
+      <a href="https://…" style="display:inline-block; padding:12px 24px; color:#ffffff; font-family: Arial, sans-serif; font-size: 15px; font-weight: bold; text-decoration: none;">Read the full case study</a>
+    </td>
+  </tr>
+</table>
+
+Footer paragraph (always include; do NOT add an unsubscribe link — dotdigital appends one automatically):
+<p style="margin: 24px 0 0 0; font-family: Arial, sans-serif; font-size: 12px; line-height: 1.4; color:#777;">
+  Signet Signs Ltd, Unit 3 Windmill Business Park, Clevedon, BS21 6SR. <a href="https://[brand-domain]" style="color:#777; text-decoration:underline;">Visit the website</a>
+</p>
+
+# Image placeholders
+
+You don't know what images the operator has on hand. For hero or inline images, use a placeholder URL with this exact pattern so the operator can find-and-replace before pushing:
+  src="https://CHANGE-ME.example.com/<short-descriptor>.jpg"
+
+Always write a useful alt text describing what the image should show — that's what the operator uses to decide what to upload.
+
+# Brand styling cues
+
+The CTA button colour above (#2a4ea0) is a sensible neutral default. Do not invent brand colours you weren't told. If the brand context names a specific accent in the brief, use it; otherwise leave the default.
 
 # Output
 
