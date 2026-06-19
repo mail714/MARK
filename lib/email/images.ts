@@ -1,6 +1,10 @@
 import { createAdminClient } from '@/lib/supabase/admin';
 import { getBrandBySlug } from '@/lib/brands';
-import { listAllCaseStudyImages, listAllSignetSignsImages } from '@/lib/wix/images';
+import {
+  listAllCaseStudyImages,
+  listAllSignetMediaFolderImages,
+  listAllSignetSignsImages,
+} from '@/lib/wix/images';
 
 export type EmailImage = {
   id: string;
@@ -192,6 +196,65 @@ export async function syncSignetSignsProductImages(): Promise<{
   let updated = 0;
   for (const i of live) {
     if (existingKey.has(i.itemId)) updated++;
+    else inserted++;
+  }
+  return { fetched: live.length, inserted, updated };
+}
+
+// Pull every image from the three curated Wix Media folders on the New Signet
+// Site (Product Images 800 x 600, Header images, People at work). For Product
+// Images the category subfolder becomes the sector; for Header / People the
+// top-level folder name becomes the sector so the picker filter can isolate
+// them.
+export async function syncSignetSignsMediaFolderImages(): Promise<{
+  fetched: number;
+  inserted: number;
+  updated: number;
+}> {
+  const live = await listAllSignetMediaFolderImages();
+  const supabase = createAdminClient();
+  const brand = await getBrandBySlug('signet-signs');
+
+  const { data: existing } = await supabase
+    .from('email_images')
+    .select('source_id')
+    .eq('source', 'wix-media')
+    .eq('brand_id', brand.id);
+  const existingKey = new Set(
+    (existing as { source_id: string }[] | null ?? []).map((r) => r.source_id),
+  );
+
+  const rows = live.map((i) => {
+    // Sector: use the category subfolder for Product Images; otherwise the
+    // top-level folder name (e.g. 'Header images', 'People at work').
+    const sector = i.subfolderName ?? i.folderName;
+    return {
+      source: 'wix-media' as const,
+      source_id: i.fileId,
+      source_role: null,
+      brand_id: brand.id,
+      sector,
+      customer_name: i.filename,
+      url: i.url,
+      alt_text: i.altText,
+      description: i.altText,
+      width: i.width,
+      height: i.height,
+      last_synced_at: new Date().toISOString(),
+    };
+  });
+
+  if (rows.length) {
+    const { error } = await supabase
+      .from('email_images')
+      .upsert(rows, { onConflict: 'source,source_id,source_role' });
+    if (error) throw new Error(`Failed to upsert Signet Media images: ${error.message}`);
+  }
+
+  let inserted = 0;
+  let updated = 0;
+  for (const i of live) {
+    if (existingKey.has(i.fileId)) updated++;
     else inserted++;
   }
   return { fetched: live.length, inserted, updated };

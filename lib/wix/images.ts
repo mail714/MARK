@@ -127,6 +127,177 @@ function safeParseStringArray(s: string): string[] {
   }
 }
 
+// ---------- Wix Media Manager (file system) ----------
+
+// File descriptor shape we care about for images in a Wix Media folder.
+type MediaFileDescriptor = {
+  id: string;
+  displayName?: string;
+  url?: string;
+  parentFolderId?: string;
+  mediaType?: string;
+  media?: {
+    image?: {
+      image?: {
+        id?: string;
+        url?: string;
+        width?: number;
+        height?: number;
+        altText?: string;
+        filename?: string;
+      };
+    };
+  };
+  state?: string;
+};
+
+type MediaFolderDescriptor = {
+  id: string;
+  displayName?: string;
+  parentFolderId?: string;
+  state?: string;
+};
+
+type ListFoldersResponse = {
+  folders?: MediaFolderDescriptor[];
+  nextCursor?: { cursors?: { next?: string } };
+};
+
+type ListFilesResponse = {
+  files?: MediaFileDescriptor[];
+  nextCursor?: { cursors?: { next?: string } };
+};
+
+async function listMediaFolders(args: {
+  siteId: string;
+  parentFolderId?: string;
+}): Promise<MediaFolderDescriptor[]> {
+  const out: MediaFolderDescriptor[] = [];
+  let cursor: string | undefined;
+  for (;;) {
+    const params = new URLSearchParams();
+    params.set('paging.limit', '100');
+    if (args.parentFolderId) params.set('parentFolderId', args.parentFolderId);
+    if (cursor) params.set('paging.cursor', cursor);
+    const res = await wix.get<ListFoldersResponse>(
+      `https://www.wixapis.com/site-media/v1/folders?${params.toString()}`,
+      { siteId: args.siteId },
+    );
+    for (const f of res.folders ?? []) {
+      if (f.state && f.state !== 'OK') continue;
+      out.push(f);
+    }
+    cursor = res.nextCursor?.cursors?.next;
+    if (!cursor) break;
+  }
+  return out;
+}
+
+async function listMediaImageFiles(args: {
+  siteId: string;
+  parentFolderId: string;
+}): Promise<MediaFileDescriptor[]> {
+  const out: MediaFileDescriptor[] = [];
+  let cursor: string | undefined;
+  for (;;) {
+    const params = new URLSearchParams();
+    params.set('parentFolderId', args.parentFolderId);
+    params.set('mediaTypes', 'IMAGE');
+    params.set('paging.limit', '100');
+    if (cursor) params.set('paging.cursor', cursor);
+    const res = await wix.get<ListFilesResponse>(
+      `https://www.wixapis.com/site-media/v1/files?${params.toString()}`,
+      { siteId: args.siteId },
+    );
+    for (const f of res.files ?? []) {
+      if (f.state && f.state !== 'OK') continue;
+      out.push(f);
+    }
+    cursor = res.nextCursor?.cursors?.next;
+    if (!cursor) break;
+  }
+  return out;
+}
+
+// Find a top-level folder under media-root by exact display name.
+async function findMediaFolderByName(args: {
+  siteId: string;
+  name: string;
+}): Promise<MediaFolderDescriptor | null> {
+  const folders = await listMediaFolders({ siteId: args.siteId });
+  const lower = args.name.toLowerCase();
+  return folders.find((f) => (f.displayName ?? '').toLowerCase() === lower) ?? null;
+}
+
+export type SignetMediaFolderImage = {
+  fileId: string;
+  folderName: string;          // top-level folder, used as part of the sector tag
+  subfolderName: string | null; // direct parent if nested (e.g. category under Product Images)
+  url: string;
+  altText: string | null;
+  filename: string | null;
+  width: number | null;
+  height: number | null;
+};
+
+// Walks the three operator-curated Media Manager folders on the New Signet
+// Site and yields one record per image. 'Product Images 800 x 600' has
+// subfolders by category (we use subfolder name as the sector); 'Header images'
+// and 'People at work' are flat and tagged with their own folder name.
+export async function listAllSignetMediaFolderImages(): Promise<SignetMediaFolderImage[]> {
+  const siteId = process.env.WIX_SITE_ID_SIGNET_SIGNS;
+  if (!siteId) throw new Error('WIX_SITE_ID_SIGNET_SIGNS is not set');
+
+  const TARGETS = [
+    { name: 'Product Images 800 x 600', recurse: true },
+    { name: 'Header images', recurse: false },
+    { name: 'People at work', recurse: false },
+  ];
+
+  const out: SignetMediaFolderImage[] = [];
+  for (const target of TARGETS) {
+    const top = await findMediaFolderByName({ siteId, name: target.name });
+    if (!top) continue;
+
+    if (target.recurse) {
+      const subfolders = await listMediaFolders({ siteId, parentFolderId: top.id });
+      for (const sub of subfolders) {
+        const files = await listMediaImageFiles({ siteId, parentFolderId: sub.id });
+        for (const f of files) pushFile(out, f, target.name, sub.displayName ?? null);
+      }
+      // Plus any images sitting directly in the parent (not in a category subfolder)
+      const direct = await listMediaImageFiles({ siteId, parentFolderId: top.id });
+      for (const f of direct) pushFile(out, f, target.name, null);
+    } else {
+      const files = await listMediaImageFiles({ siteId, parentFolderId: top.id });
+      for (const f of files) pushFile(out, f, target.name, null);
+    }
+  }
+  return out;
+}
+
+function pushFile(
+  out: SignetMediaFolderImage[],
+  f: MediaFileDescriptor,
+  folderName: string,
+  subfolderName: string | null,
+): void {
+  const image = f.media?.image?.image;
+  const mediaId = image?.id;
+  if (!mediaId) return;
+  const url = `https://static.wixstatic.com/media/${mediaId}`;
+  out.push({
+    fileId: f.id,
+    folderName,
+    subfolderName,
+    url,
+    altText: image?.altText ?? null,
+    filename: image?.filename ?? f.displayName ?? null,
+    width: typeof image?.width === 'number' ? image.width : null,
+    height: typeof image?.height === 'number' ? image.height : null,
+  });
+}
+
 export type SignetSignsImage = {
   itemId: string;
   productName: string | null;
