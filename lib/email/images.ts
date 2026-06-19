@@ -1,6 +1,6 @@
 import { createAdminClient } from '@/lib/supabase/admin';
 import { getBrandBySlug } from '@/lib/brands';
-import { listAllCaseStudyImages } from '@/lib/wix/images';
+import { listAllCaseStudyImages, listAllSignetSignsImages } from '@/lib/wix/images';
 
 export type EmailImage = {
   id: string;
@@ -32,17 +32,53 @@ function normaliseSector(clubTypes: string[]): string | null {
 export async function listEmailImages(filter?: {
   brandId?: string | null;
   sector?: string | null;
-}): Promise<EmailImage[]> {
+  search?: string | null;
+  page?: number;
+  pageSize?: number;
+}): Promise<{ items: EmailImage[]; total: number; page: number; pageSize: number }> {
   const supabase = createAdminClient();
+  const pageSize = filter?.pageSize ?? 36;
+  const page = Math.max(1, filter?.page ?? 1);
+  const from = (page - 1) * pageSize;
+  const to = from + pageSize - 1;
+
   let q = supabase
     .from('email_images')
-    .select('*')
-    .order('last_synced_at', { ascending: false });
+    .select('*', { count: 'exact' })
+    .order('sector', { ascending: true, nullsFirst: false })
+    .order('customer_name', { ascending: true });
   if (filter?.brandId) q = q.eq('brand_id', filter.brandId);
   if (filter?.sector) q = q.eq('sector', filter.sector);
-  const { data, error } = await q;
+  if (filter?.search) {
+    const safe = filter.search.replace(/[%_,]/g, (c) => `\\${c}`);
+    q = q.or(
+      `alt_text.ilike.%${safe}%,description.ilike.%${safe}%,customer_name.ilike.%${safe}%`,
+    );
+  }
+  q = q.range(from, to);
+
+  const { data, count, error } = await q;
   if (error) throw new Error(`Failed to load email images: ${error.message}`);
-  return (data as EmailImage[]) ?? [];
+  return {
+    items: (data as EmailImage[]) ?? [],
+    total: count ?? 0,
+    page,
+    pageSize,
+  };
+}
+
+// Distinct sectors across the email_images table, for the filter dropdowns.
+export async function listAllImageSectors(filter?: { brandId?: string | null }): Promise<string[]> {
+  const supabase = createAdminClient();
+  let q = supabase.from('email_images').select('sector');
+  if (filter?.brandId) q = q.eq('brand_id', filter.brandId);
+  const { data, error } = await q;
+  if (error) return [];
+  const set = new Set<string>();
+  for (const r of (data as { sector: string | null }[] | null) ?? []) {
+    if (r.sector) set.add(r.sector);
+  }
+  return Array.from(set).sort();
 }
 
 // Pull every case-study image from the Honours Boards Wix collection and upsert
@@ -101,6 +137,61 @@ export async function syncHonoursBoardsCaseStudyImages(): Promise<{
   let updated = 0;
   for (const i of live) {
     if (existingKey.has(`${i.itemId}::${i.role}`)) updated++;
+    else inserted++;
+  }
+  return { fetched: live.length, inserted, updated };
+}
+
+// Pull every Products item image from the New Signet Site Wix collection and
+// upsert into email_images. Sector is mapped from producttypetag (e.g. 'shop
+// signs'). int_or_ext info is appended to the description so the operator can
+// see at a glance whether it's internal / external in the picker.
+export async function syncSignetSignsProductImages(): Promise<{
+  fetched: number;
+  inserted: number;
+  updated: number;
+}> {
+  const live = await listAllSignetSignsImages();
+  const supabase = createAdminClient();
+  const brand = await getBrandBySlug('signet-signs');
+
+  // Signet uses a different source label so it can't collide with Honours
+  // Boards rows on the unique (source, source_id, source_role) key.
+  const { data: existing } = await supabase
+    .from('email_images')
+    .select('source_id')
+    .eq('source', 'wix-media')
+    .eq('brand_id', brand.id);
+  const existingKey = new Set(
+    (existing as { source_id: string }[] | null ?? []).map((r) => r.source_id),
+  );
+
+  const rows = live.map((i) => ({
+    source: 'wix-media' as const,
+    source_id: i.itemId,
+    source_role: null,
+    brand_id: brand.id,
+    sector: i.productType,
+    customer_name: i.productName,
+    url: i.url,
+    alt_text: i.altText,
+    description: [i.altText, i.intOrExt ? `(${i.intOrExt})` : null].filter(Boolean).join(' ') || null,
+    width: i.width,
+    height: i.height,
+    last_synced_at: new Date().toISOString(),
+  }));
+
+  if (rows.length) {
+    const { error } = await supabase
+      .from('email_images')
+      .upsert(rows, { onConflict: 'source,source_id,source_role' });
+    if (error) throw new Error(`Failed to upsert Signet Signs images: ${error.message}`);
+  }
+
+  let inserted = 0;
+  let updated = 0;
+  for (const i of live) {
+    if (existingKey.has(i.itemId)) updated++;
     else inserted++;
   }
   return { fetched: live.length, inserted, updated };

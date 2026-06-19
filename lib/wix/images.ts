@@ -126,3 +126,67 @@ function safeParseStringArray(s: string): string[] {
     return [];
   }
 }
+
+export type SignetSignsImage = {
+  itemId: string;
+  productName: string | null;
+  productType: string | null;     // First producttypetag — used as the sector
+  intOrExt: string | null;        // 'internal' | 'external' | 'service'
+  ref: string;
+  url: string;
+  altText: string | null;
+  width: number | null;
+  height: number | null;
+};
+
+// Pulls every Products item from the New Signet Site (06a516dd-...) and yields
+// one image per item (each has a single repeaterImage field). product_type_tag
+// (e.g. 'shop signs', 'vinyl graphics') is used as the sector for the picker.
+export async function listAllSignetSignsImages(): Promise<SignetSignsImage[]> {
+  const siteId = process.env.WIX_SITE_ID_SIGNET_SIGNS;
+  if (!siteId) throw new Error('WIX_SITE_ID_SIGNET_SIGNS is not set');
+
+  const out: SignetSignsImage[] = [];
+  let cursor: string | undefined;
+  for (;;) {
+    const body: { dataCollectionId: string; query: { cursorPaging: { limit: number; cursor?: string } } } = {
+      dataCollectionId: 'Products',
+      query: { cursorPaging: { limit: 100 } },
+    };
+    if (cursor) body.query.cursorPaging.cursor = cursor;
+    const res = await wix.post<QueryDataItemsResponse>(
+      'https://www.wixapis.com/wix-data/v2/items/query',
+      body,
+      { siteId },
+    );
+    for (const it of res.dataItems ?? []) {
+      const d = it.data;
+      const itemId = typeof d._id === 'string' ? d._id : null;
+      if (!itemId) continue;
+      const ref = typeof d.repeaterImage === 'string' ? d.repeaterImage : null;
+      const url = wixImageRefToStaticUrl(ref);
+      if (!ref || !url) continue;
+      const dims = wixImageDimensions(ref);
+      const productType = Array.isArray(d.producttypetag) && d.producttypetag.length > 0 && typeof d.producttypetag[0] === 'string'
+        ? d.producttypetag[0]
+        : null;
+      const intOrExt = Array.isArray(d.intOrExtOrServiceTag) && d.intOrExtOrServiceTag.length > 0 && typeof d.intOrExtOrServiceTag[0] === 'string'
+        ? d.intOrExtOrServiceTag[0]
+        : null;
+      out.push({
+        itemId,
+        productName: typeof d.productName === 'string' ? d.productName : null,
+        productType,
+        intOrExt,
+        ref,
+        url,
+        altText: typeof d.repeaterImageAltText === 'string' ? d.repeaterImageAltText : null,
+        width: dims.width,
+        height: dims.height,
+      });
+    }
+    cursor = res.pagingMetadata?.cursors?.next;
+    if (!cursor) break;
+  }
+  return out;
+}
