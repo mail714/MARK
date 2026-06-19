@@ -31,8 +31,8 @@ The marketing planner module will eventually generate sector-aware content calen
 In the order they'll be built (case study producer first, dashboard skeleton alongside it):
 
 1. **Case Study Producer** — turns sales orders + design proofs + install photos into published Wix CMS case studies and social variants. **Building first, for Honours Boards.**
-2. **Chimera Ingest** — Chimera is an existing program that scrapes web prospects. This module surfaces and manages the Excel sheet + Mailchimp sync.
-3. **Email Campaign Builder** — drafts and sends campaigns through Mailchimp. ~15,000 emails/week growing.
+2. **Chimera Ingest** — Chimera is an existing program that scrapes web prospects. This module surfaces and manages the Excel/Sheet of prospects + dotdigital address-book sync.
+3. **Email Campaign Builder** — drafts campaigns in MARK, pushes them to dotdigital as drafts ready to send. ~30,000 emails/month split by sector address book.
 4. **Landing Page Builder** — generates Wix Studio dynamic CMS landing pages, one per email campaign.
 5. **Content Creator** — drafts social posts for the three brands' channels.
 6. **Marketing Planner** — sector-aware content calendar that feeds the content creator and email modules.
@@ -54,14 +54,14 @@ In the order they'll be built (case study producer first, dashboard skeleton alo
 | Image processing | `sharp` | Resize to 1200×900, crop, format |
 | Google Drive | `googleapis` (official Node client) | File source for case studies |
 | Wix integration | Wix MCP connector + Wix Data API | CMS pushes, image uploads |
-| Mailchimp | `@mailchimp/mailchimp_marketing` | When email module is built |
+| dotdigital | dotdigital REST API (direct fetch) | When email module is built |
 
 ## Key Constraints and Gotchas
 
 - **ShopVox API is outbound-only** for incoming data into ShopVox. We cannot read sales orders, customers, or jobs from it. The case study producer relies on manual file drops to Drive instead.
 - **Wix API is workable but fiddly.** Use the Wix MCP connector where possible. Webhooks not in scope.
 - **TikTok Content Posting API is heavily gated.** Parked. Not building TikTok integration in the first phase.
-- **Mailchimp at 15k+ emails/week** needs the right tier and proper sender authentication (SPF, DKIM, DMARC) per sending domain. Address before turning the email module on.
+- **dotdigital at 15k+ emails/week** needs the right tier and proper sender authentication (SPF, DKIM, DMARC) per sending domain. Address before turning the email module on.
 - **Old Adobe versions only.** Canva can be purchased if needed for the design pieces.
 
 ## Principles
@@ -82,7 +82,7 @@ These are not preferences — they're hard rules:
 | Anthropic API | Need key | AI generation |
 | Google Cloud | Need to set up | Drive API + Gemini (if used) |
 | Wix | ✅ Three sites exist | CMS pushes |
-| Mailchimp | ✅ Have account, one address book per brand | Email campaigns |
+| dotdigital | ✅ Have account, \~10 address books segmented by sector | Email campaigns |
 | Vercel | Likely needed | Hosting |
 | Facebook / Instagram (Signet Signs, Signet Play) | ✅ Exist | Social publishing |
 | Facebook / Instagram / Pinterest (Honours Boards) | ❌ To set up | Social publishing |

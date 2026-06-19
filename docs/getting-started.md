@@ -30,7 +30,7 @@ Don't try to do this all at once. Ask for credentials as each step needs them. S
 2. **Anthropic API key** — needed for Step 7
 3. **Google Cloud credentials** for Drive API access — needed for Step 3 of the build order. A service account JSON is simpler than OAuth for a single-user system.
 4. **Wix API credentials** — needed for Step 10. Wix MCP connector may avoid this; check first.
-5. **Mailchimp API key** — needed much later, when the email module is in scope.
+5. **dotdigital API user credentials** — needed much later, when the email module is in scope.
 
 Never log credentials. Use `.env.local`. Confirm with the user that `.env.local` is in `.gitignore` before adding any secrets.
 
@@ -111,7 +111,7 @@ Follow the build order in `case-study-producer-spec.md`. Each step should:
 
 ## Principles to Hold To
 
-- **Real integrations over mocks.** Always test against the actual Drive folder, the actual Wix CMS (in a draft/sandbox state), the actual Mailchimp account. Mocks lie.
+- **Real integrations over mocks.** Always test against the actual Drive folder, the actual Wix CMS (in a draft/sandbox state), the actual dotdigital account. Mocks lie.
 - **Human approval is a hard gate.** Nothing publishes without an explicit operator action in the UI.
 - **Multi-brand awareness from day one.** Even though we're building Honours Boards first, every record carries a `brand_id`. Don't bake "honours-boards" assumptions into table names, slug logic, or routing.
 - **Voice grounding matters.** AI text generation must be prompted with real existing case studies as exemplars. Generic prose damages the brand. Ground the prompt with at least 3 full existing case studies pulled from the live site.
