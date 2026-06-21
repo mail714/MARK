@@ -1,35 +1,35 @@
+import type Anthropic from '@anthropic-ai/sdk';
 import { DEFAULT_MODEL, getAnthropicClient } from './anthropic';
 import {
   buildUserMessage,
-  DRAFT_FIELD_KEYS,
-  EMIT_TOOL,
   SYSTEM_PROMPT,
   type EmailDraftContext,
-  type EmailDraftFields,
-  type ToolSchema,
 } from './prompts/email-draft';
+import type { EmailTemplate } from '@/lib/email/templates';
 
-export async function draftEmail(ctx: EmailDraftContext): Promise<EmailDraftFields> {
+export type EmailDraftResult = {
+  toolInput: Record<string, unknown>;
+};
+
+export async function draftEmail(
+  ctx: EmailDraftContext,
+  template: EmailTemplate,
+): Promise<EmailDraftResult> {
   const client = getAnthropicClient();
-  const userMessage = await buildUserMessage(ctx);
+  const userMessage = await buildUserMessage(ctx, template);
 
   const response = await client.messages.create({
     model: DEFAULT_MODEL,
-    max_tokens: 3000,
+    max_tokens: 4000,
     system: [{ type: 'text', text: SYSTEM_PROMPT, cache_control: { type: 'ephemeral' } }],
-    tools: [EMIT_TOOL] as ToolSchema[],
-    tool_choice: { type: 'tool', name: EMIT_TOOL.name },
+    tools: [template.emitTool] as Anthropic.Tool[],
+    tool_choice: { type: 'tool', name: template.emitTool.name },
     messages: [{ role: 'user', content: userMessage }],
   });
 
   const toolUse = response.content.find((b) => b.type === 'tool_use');
   if (!toolUse || toolUse.type !== 'tool_use') {
-    throw new Error('Model did not call emit_email tool');
+    throw new Error(`Model did not call ${template.emitTool.name} tool`);
   }
-  const input = toolUse.input as Partial<EmailDraftFields>;
-  const missing = DRAFT_FIELD_KEYS.filter((k) => !input[k] || typeof input[k] !== 'string');
-  if (missing.length) {
-    throw new Error(`Model output missing fields: ${missing.join(', ')}`);
-  }
-  return input as EmailDraftFields;
+  return { toolInput: toolUse.input as Record<string, unknown> };
 }

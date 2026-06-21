@@ -22,6 +22,7 @@ export type EmailDraftContext = {
   audienceDescription: string;
   heroImageUrl: string | null;
   heroImageAlt: string | null;
+  libraryImages: { url: string; altText: string | null; sector: string | null }[];
 };
 
 export const SYSTEM_PROMPT = `You are a senior copywriter drafting marketing emails for one of Signet's three brands: Honours Boards (honours-boards.co.uk), Signet Signs (signetsigns.co.uk) or Signet Play (signet-play.co.uk).
@@ -198,8 +199,20 @@ export async function fetchVoiceAnchors(): Promise<
   );
 }
 
-export async function buildUserMessage(ctx: EmailDraftContext): Promise<string> {
+import type { EmailTemplate } from '@/lib/email/templates';
+
+export async function buildUserMessage(
+  ctx: EmailDraftContext,
+  template: EmailTemplate,
+): Promise<string> {
   const lines: string[] = [];
+
+  // Template-specific structural instructions go first so the model knows
+  // what shape of content to produce.
+  lines.push('# Template');
+  lines.push(`Selected template: ${template.name}`);
+  lines.push(template.promptInstructions);
+  lines.push('');
 
   const anchors = await fetchVoiceAnchors();
   if (anchors.length > 0) {
@@ -246,7 +259,19 @@ export async function buildUserMessage(ctx: EmailDraftContext): Promise<string> 
       'Intent: no specific brief — write a sensible default for this brand + sector + campaign type combination.',
     );
   }
-  lines.push('', 'Now call emit_email.');
+
+  if (ctx.libraryImages.length > 0) {
+    lines.push(
+      '',
+      '## Image library — pick image URLs verbatim from this list, do not invent or alter URLs',
+    );
+    for (const img of ctx.libraryImages.slice(0, 60)) {
+      const sector = img.sector ? `[${img.sector}] ` : '';
+      lines.push(`- ${sector}${img.url} — ${img.altText ?? '(no alt text)'}`);
+    }
+  }
+
+  lines.push('', `Now call ${template.emitTool.name} with the structure described above.`);
 
   return lines.join('\n');
 }

@@ -16,8 +16,15 @@ type Props = {
     campaign_type: 'newsletter' | 'promotional' | 'announcement' | null;
     intent: string | null;
     address_book_ids: number[];
+    template_key: string;
   };
 };
+
+const TEMPLATES: { value: string; label: string; hint: string }[] = [
+  { value: 'plain-text', label: 'Plain text', hint: 'Image-free letter style.' },
+  { value: 'simple-hero', label: 'Simple hero', hint: 'Single hero image + body + CTA.' },
+  { value: 'multi-section', label: 'Multi-section newsletter', hint: 'Hero + 2-4 themed sections + CTA.' },
+];
 
 const CAMPAIGN_TYPES: { value: 'newsletter' | 'promotional' | 'announcement'; label: string }[] = [
   { value: 'newsletter', label: 'Newsletter' },
@@ -30,6 +37,7 @@ export function CampaignBriefForm({ campaignId, brands, addressBooks, initial }:
   const [brandId, setBrandId] = useState(initial.brand_id ?? '');
   const [sector, setSector] = useState(initial.sector ?? '');
   const [campaignType, setCampaignType] = useState(initial.campaign_type ?? '');
+  const [templateKey, setTemplateKey] = useState(initial.template_key ?? 'simple-hero');
   const [intent, setIntent] = useState(initial.intent ?? '');
   const [bookIds, setBookIds] = useState<number[]>(initial.address_book_ids);
   const [error, setError] = useState<string | null>(null);
@@ -117,6 +125,23 @@ export function CampaignBriefForm({ campaignId, brands, addressBooks, initial }:
               <option key={c.value} value={c.value}>{c.label}</option>
             ))}
           </select>
+        </Field>
+        <Field label="Template" savingField={savingField} thisField="template_key">
+          <select
+            value={templateKey}
+            onChange={(e) => {
+              setTemplateKey(e.target.value);
+              save('template_key', e.target.value);
+            }}
+            className="w-full rounded-md border border-neutral-200 bg-white px-3 py-2 text-sm shadow-sm focus:border-neutral-500 focus:outline-none"
+          >
+            {TEMPLATES.map((t) => (
+              <option key={t.value} value={t.value}>{t.label}</option>
+            ))}
+          </select>
+          <p className="mt-1 text-[10px] text-neutral-500">
+            {TEMPLATES.find((t) => t.value === templateKey)?.hint}
+          </p>
         </Field>
       </div>
 

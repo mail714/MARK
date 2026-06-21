@@ -12,6 +12,7 @@ const EDITABLE_FIELDS = [
   'campaign_type',
   'intent',
   'address_book_ids',
+  'template_key',
   'subject',
   'preheader',
   'html_body',

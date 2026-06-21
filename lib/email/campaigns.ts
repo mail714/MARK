@@ -12,6 +12,7 @@ export type EmailCampaign = {
   campaign_type: CampaignType | null;
   intent: string | null;
   address_book_ids: number[];
+  template_key: string;
   subject: string | null;
   preheader: string | null;
   html_body: string | null;
@@ -85,6 +86,7 @@ const EDITABLE_FIELDS = [
   'campaign_type',
   'intent',
   'address_book_ids',
+  'template_key',
   'subject',
   'preheader',
   'html_body',

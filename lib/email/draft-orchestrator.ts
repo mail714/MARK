@@ -1,7 +1,9 @@
 import { createAdminClient } from '@/lib/supabase/admin';
 import { getCampaign, updateCampaign } from './campaigns';
-import { pickHeroImage } from './images';
+import { listEmailImages, pickHeroImage } from './images';
 import { draftEmail } from '@/lib/ai/draft-email';
+import { getTemplate } from './templates';
+import { paletteForBrand } from './templates/brand-palettes';
 import type { Brand } from '@/lib/types';
 
 export async function draftCampaignCopy(campaignId: string): Promise<void> {
@@ -10,24 +12,25 @@ export async function draftCampaignCopy(campaignId: string): Promise<void> {
 
   const supabase = createAdminClient();
 
-  // Brand name + website provide brand voice context to the prompt.
+  // Brand name + website + slug drive the prompt context and the palette pick.
   let brandName: string | null = null;
   let brandWebsite: string | null = null;
+  let brandSlug: string | null = null;
   if (cs.brand_id) {
     const { data: brand } = await supabase
       .from('brands')
-      .select('name, website_url')
+      .select('name, website_url, slug')
       .eq('id', cs.brand_id)
       .maybeSingle();
     if (brand) {
-      const b = brand as Pick<Brand, 'name' | 'website_url'>;
+      const b = brand as Pick<Brand, 'name' | 'website_url' | 'slug'>;
       brandName = b.name;
       brandWebsite = b.website_url;
+      brandSlug = b.slug;
     }
   }
 
-  // Look up the names of the selected address books so the model knows
-  // who it's writing to.
+  // Audience description for the prompt.
   let audienceDescription = '';
   if (cs.address_book_ids.length > 0) {
     const { data: books } = await supabase
@@ -46,9 +49,7 @@ export async function draftCampaignCopy(campaignId: string): Promise<void> {
     }
   }
 
-  // Hero image: use the operator's pick, fall back to a best-fit from the
-  // library based on brand + sector. Save the auto-pick back onto the row
-  // so it shows up in the picker UI on next render.
+  // Hero image — operator pick or auto-fall back.
   let heroUrl = cs.hero_image_url;
   let heroAlt = cs.hero_image_alt;
   if (!heroUrl) {
@@ -63,17 +64,54 @@ export async function draftCampaignCopy(campaignId: string): Promise<void> {
     }
   }
 
+  // Image library — pull a brand-scoped subset so the AI can reference URLs
+  // verbatim when picking per-section images. Sector-scoped first, then any
+  // for the brand, capped to keep prompt tokens reasonable.
+  const libByBrandSector = await listEmailImages({
+    brandId: cs.brand_id,
+    sector: cs.sector,
+    pageSize: 30,
+  });
+  const libByBrand = await listEmailImages({
+    brandId: cs.brand_id,
+    pageSize: 40,
+  });
+  const seen = new Set<string>();
+  const libraryImages: { url: string; altText: string | null; sector: string | null }[] = [];
+  for (const img of [...libByBrandSector.items, ...libByBrand.items]) {
+    if (seen.has(img.url)) continue;
+    seen.add(img.url);
+    libraryImages.push({ url: img.url, altText: img.alt_text, sector: img.sector });
+    if (libraryImages.length >= 50) break;
+  }
+
+  const template = getTemplate(cs.template_key);
+  const palette = paletteForBrand(brandSlug);
+
   try {
-    const fields = await draftEmail({
-      brandName,
-      brandWebsite,
-      sector: cs.sector,
-      campaignType: cs.campaign_type,
-      intent: cs.intent,
-      audienceDescription,
+    const result = await draftEmail(
+      {
+        brandName,
+        brandWebsite,
+        sector: cs.sector,
+        campaignType: cs.campaign_type,
+        intent: cs.intent,
+        audienceDescription,
+        heroImageUrl: heroUrl,
+        heroImageAlt: heroAlt,
+        libraryImages,
+      },
+      template,
+    );
+
+    const fields = template.extractFields(result.toolInput, {
+      brandName: brandName ?? 'Signet',
+      brandWebsite: brandWebsite ?? 'https://www.signetsigns.co.uk',
+      brandPalette: palette,
       heroImageUrl: heroUrl,
       heroImageAlt: heroAlt,
     });
+
     await updateCampaign(campaignId, {
       subject: fields.subject,
       preheader: fields.preheader,

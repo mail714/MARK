@@ -89,6 +89,7 @@ export default async function CampaignDetailPage({
             campaign_type: campaign.campaign_type,
             intent: campaign.intent,
             address_book_ids: campaign.address_book_ids,
+            template_key: campaign.template_key,
           }}
         />
         <HeroImagePicker
