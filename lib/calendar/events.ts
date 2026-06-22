@@ -1,5 +1,6 @@
 import { createAdminClient } from '@/lib/supabase/admin';
 import { listSocialPostsForRange } from '@/lib/social/posts';
+import { listBrandSocialAccounts } from '@/lib/social/accounts';
 import type { SocialPlatform } from '@/lib/social/platforms';
 
 // Unified shape for anything that lands on the marketing calendar — emails,
@@ -138,11 +139,24 @@ async function fetchSocialEvents(
   start: Date,
   end: Date,
 ): Promise<CalendarEvent[]> {
-  const posts = await listSocialPostsForRange(start, end);
+  const [posts, accounts] = await Promise.all([
+    listSocialPostsForRange(start, end),
+    listBrandSocialAccounts(),
+  ]);
+  // Fall back to the brand's profile URL on the calendar modal when a specific
+  // post hasn't been published yet — saves the operator a hop to the platform.
+  const profileByBrandPlatform = new Map<string, string>();
+  for (const a of accounts) {
+    if (a.profile_url) profileByBrandPlatform.set(`${a.brand_id}:${a.platform}`, a.profile_url);
+  }
+
   const events: CalendarEvent[] = [];
   for (const p of posts) {
     if (!p.planned_publish_at) continue;
     const captionSnippet = p.caption ? p.caption.slice(0, 80) : null;
+    const fallbackUrl = p.brand_id
+      ? profileByBrandPlatform.get(`${p.brand_id}:${p.platform}`) ?? null
+      : null;
     events.push({
       key: `social-${p.id}`,
       source: 'social',
@@ -154,7 +168,7 @@ async function fetchSocialEvents(
       subtitle: captionSnippet,
       status: p.status,
       detailHref: `/social/${p.id}`,
-      liveUrl: p.live_url,
+      liveUrl: p.live_url ?? fallbackUrl,
       platform: p.platform,
       detail: {
         platform: p.platform,

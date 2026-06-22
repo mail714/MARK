@@ -3,6 +3,7 @@ import { getCaseStudy } from '@/lib/case-studies';
 import { getCaseStudyPhotos } from '@/lib/case-study-photos';
 import { draftSocialPosts } from '@/lib/ai/draft-social';
 import { createSocialPost } from './posts';
+import { getBrandSocialAccounts } from './accounts';
 import { platformsForBrand, type SocialPlatform } from './platforms';
 import type { Brand } from '@/lib/types';
 
@@ -63,6 +64,9 @@ export async function generateSocialPostsFromCaseStudy(
     );
   }
 
+  const accounts = brand ? await getBrandSocialAccounts(brand.id) : [];
+  const accountsByPlatform = new Map(accounts.map((a) => [a.platform, a]));
+
   const photos = await getCaseStudyPhotos(caseStudyId);
   const availableMedia = photos
     .filter((p) => p.processed_public_url || p.wix_media_url)
@@ -78,6 +82,14 @@ export async function generateSocialPostsFromCaseStudy(
     brandWebsite: brand?.website_url ?? null,
     sector,
     platforms,
+    accounts: platforms.map((p) => {
+      const a = accountsByPlatform.get(p);
+      return {
+        platform: p,
+        handle: a?.handle ?? null,
+        profile_url: a?.profile_url ?? null,
+      };
+    }),
     source: {
       type: 'case-study',
       title: cs.customer_name ?? cs.drive_folder_name,

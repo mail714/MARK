@@ -31,12 +31,20 @@ export default async function SocialListPage() {
 
   return (
     <div className="space-y-6">
-      <header>
-        <h1 className="text-2xl font-semibold tracking-tight">Social posts</h1>
-        <p className="mt-1 text-sm text-neutral-600">
-          Drafts generated from case studies and emails, one per platform configured for each brand.
-          Review, edit, schedule.
-        </p>
+      <header className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight">Social posts</h1>
+          <p className="mt-1 text-sm text-neutral-600">
+            Drafts generated from case studies and emails, one per platform configured for each brand.
+            Review, edit, schedule.
+          </p>
+        </div>
+        <Link
+          href="/social/accounts"
+          className="rounded-md border border-neutral-300 bg-white px-3 py-1.5 text-xs font-medium text-neutral-700 hover:bg-neutral-50"
+        >
+          Manage accounts →
+        </Link>
       </header>
 
       {posts.length === 0 ? (

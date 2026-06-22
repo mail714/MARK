@@ -1,11 +1,18 @@
 import type Anthropic from '@anthropic-ai/sdk';
 import type { SocialPlatform } from '@/lib/social/platforms';
 
+export type SocialAccountContext = {
+  platform: SocialPlatform;
+  handle: string | null;
+  profile_url: string | null;
+};
+
 export type SocialDraftContext = {
   brandName: string | null;
   brandWebsite: string | null;
   sector: string | null;
   platforms: SocialPlatform[];
+  accounts: SocialAccountContext[];
   source: {
     type: 'case-study' | 'email' | 'standalone';
     title: string;
@@ -115,6 +122,18 @@ export function buildUserMessage(ctx: SocialDraftContext): string {
   if (ctx.sector) lines.push(`Sector: ${ctx.sector}`);
   lines.push(`Platforms to write for (one post per platform, in this order): ${ctx.platforms.join(', ')}`);
   lines.push('');
+  if (ctx.accounts.length > 0) {
+    lines.push('# Brand accounts');
+    lines.push('Use these handles where it reads naturally. Do NOT @-mention the brand on its own posts (it already owns the page). Refer to sibling accounts when cross-promoting.');
+    for (const a of ctx.accounts) {
+      const parts: string[] = [`- ${a.platform}`];
+      if (a.handle) parts.push(`handle: ${a.handle}`);
+      if (a.profile_url) parts.push(`profile: ${a.profile_url}`);
+      if (!a.handle && !a.profile_url) parts.push('(no account configured yet — draft without referencing a handle)');
+      lines.push(parts.join(' · '));
+    }
+    lines.push('');
+  }
   lines.push(`Source: ${ctx.source.type}`);
   lines.push(`Title: ${ctx.source.title}`);
   if (ctx.source.detailUrl) lines.push(`Detail URL: ${ctx.source.detailUrl}`);
