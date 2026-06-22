@@ -10,6 +10,15 @@ type Brand = { id: string; slug: string; name: string };
 const SOURCE_LABEL: Record<string, string> = {
   email: 'Email campaign',
   'case-study': 'Case study published',
+  social: 'Social post',
+};
+
+const PLATFORM_LABEL: Record<string, string> = {
+  instagram: 'Instagram',
+  facebook: 'Facebook',
+  tiktok: 'TikTok',
+  linkedin: 'LinkedIn',
+  pinterest: 'Pinterest',
 };
 
 function fmtDate(iso: string): string {
@@ -116,6 +125,7 @@ function ModalContents({
         {event.source === 'case-study' ? (
           <CaseStudyRows detail={event.detail} />
         ) : null}
+        {event.source === 'social' ? <SocialRows detail={event.detail} /> : null}
       </dl>
 
       <div className="flex flex-wrap items-center justify-end gap-2 pt-2">
@@ -169,6 +179,47 @@ function EmailRows({ detail }: { detail: Record<string, unknown> }) {
         </Row>
       ) : null}
       {ddId ? <Row label="dotdigital ID">{ddId}</Row> : null}
+    </>
+  );
+}
+
+function SocialRows({ detail }: { detail: Record<string, unknown> }) {
+  const platform = typeof detail.platform === 'string' ? detail.platform : null;
+  const mediaKind = typeof detail.media_kind === 'string' ? detail.media_kind : null;
+  const mediaCount = typeof detail.media_count === 'number' ? detail.media_count : 0;
+  const caption = typeof detail.caption === 'string' ? detail.caption : null;
+  const shotBrief = typeof detail.shot_brief === 'string' ? detail.shot_brief : null;
+  const hashtags = Array.isArray(detail.hashtags) ? (detail.hashtags as string[]) : [];
+  return (
+    <>
+      {platform ? <Row label="Platform">{PLATFORM_LABEL[platform] ?? platform}</Row> : null}
+      {mediaKind ? (
+        <Row label="Media">
+          {mediaKind === 'none' ? 'Text only' : `${mediaCount} ${mediaKind}${mediaCount === 1 ? '' : 's'}`}
+        </Row>
+      ) : null}
+      {hashtags.length > 0 ? (
+        <Row label="Hashtags">
+          <span className="text-xs text-neutral-600">
+            {hashtags.slice(0, 4).map((h) => `#${h}`).join(' ')}
+            {hashtags.length > 4 ? ` +${hashtags.length - 4}` : ''}
+          </span>
+        </Row>
+      ) : null}
+      {caption ? (
+        <Row label="Caption">
+          <span className="line-clamp-3 max-w-[220px] text-left text-xs text-neutral-600">
+            {caption}
+          </span>
+        </Row>
+      ) : null}
+      {shotBrief ? (
+        <Row label="Shoot">
+          <span className="line-clamp-2 max-w-[220px] text-left text-xs text-amber-800">
+            {shotBrief}
+          </span>
+        </Row>
+      ) : null}
     </>
   );
 }

@@ -3,6 +3,7 @@
 import { useMemo, useState } from 'react';
 import type { CalendarEvent } from '@/lib/calendar/events';
 import { swatchForBrand } from '@/lib/email/brand-colours';
+import { PLATFORM_DOT } from '@/lib/social/platforms';
 import { CalendarEventModal } from './CalendarEventModal';
 
 type Brand = { id: string; slug: string; name: string };
@@ -115,7 +116,10 @@ export function CalendarView({
                     const brand = e.brandId ? brandsById.get(e.brandId) : null;
                     const swatch = swatchForBrand(brand?.slug ?? null);
                     const tone = STATUS_TONE[e.status] ?? 'bg-neutral-100 text-neutral-700 ring-neutral-200';
-                    const dot = SOURCE_DOT[e.source] ?? 'bg-neutral-400';
+                    const dot =
+                      e.source === 'social' && e.platform
+                        ? PLATFORM_DOT[e.platform]
+                        : SOURCE_DOT[e.source] ?? 'bg-neutral-400';
                     return (
                       <button
                         key={e.key}

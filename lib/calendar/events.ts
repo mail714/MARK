@@ -1,10 +1,12 @@
 import { createAdminClient } from '@/lib/supabase/admin';
+import { listSocialPostsForRange } from '@/lib/social/posts';
+import type { SocialPlatform } from '@/lib/social/platforms';
 
 // Unified shape for anything that lands on the marketing calendar — emails,
-// case studies, future social posts, etc. The calendar UI doesn't care which
+// case studies, social posts, etc. The calendar UI doesn't care which
 // module produced the event; it cares about brand, sector, date, status and
 // a link back to the source's detail page.
-export type CalendarEventSource = 'email' | 'case-study';
+export type CalendarEventSource = 'email' | 'case-study' | 'social';
 
 export type CalendarEvent = {
   // Stable id, namespaced by source so we can dedupe / key safely.
@@ -20,6 +22,9 @@ export type CalendarEvent = {
   detailHref: string;                 // 'Open' link in the modal
   liveUrl: string | null;             // 'View live' link in the modal (if applicable)
   detail: Record<string, unknown>;    // free-form additional context for the modal
+  // Optional platform discriminator for social events. The calendar uses
+  // this for per-platform dot colours; other sources leave it null.
+  platform?: SocialPlatform | null;
 };
 
 async function fetchEmailEvents(
@@ -129,15 +134,51 @@ async function fetchCaseStudyEvents(
   return events;
 }
 
+async function fetchSocialEvents(
+  start: Date,
+  end: Date,
+): Promise<CalendarEvent[]> {
+  const posts = await listSocialPostsForRange(start, end);
+  const events: CalendarEvent[] = [];
+  for (const p of posts) {
+    if (!p.planned_publish_at) continue;
+    const captionSnippet = p.caption ? p.caption.slice(0, 80) : null;
+    events.push({
+      key: `social-${p.id}`,
+      source: 'social',
+      sourceId: p.id,
+      date: p.planned_publish_at,
+      brandId: p.brand_id,
+      sector: p.sector,
+      title: p.internal_name ?? captionSnippet ?? '(social post)',
+      subtitle: captionSnippet,
+      status: p.status,
+      detailHref: `/social/${p.id}`,
+      liveUrl: p.live_url,
+      platform: p.platform,
+      detail: {
+        platform: p.platform,
+        media_kind: p.media_kind,
+        hashtags: p.hashtags,
+        media_count: p.media_urls.length,
+        shot_brief: p.shot_brief,
+        caption: p.caption,
+      },
+    });
+  }
+  return events;
+}
+
 export async function listCalendarEvents(
   start: Date,
   end: Date,
 ): Promise<CalendarEvent[]> {
-  const [emails, caseStudies] = await Promise.all([
+  const [emails, caseStudies, social] = await Promise.all([
     fetchEmailEvents(start, end),
     fetchCaseStudyEvents(start, end),
+    fetchSocialEvents(start, end),
   ]);
-  return [...emails, ...caseStudies].sort((a, b) =>
+  return [...emails, ...caseStudies, ...social].sort((a, b) =>
     a.date.localeCompare(b.date),
   );
 }

@@ -5,6 +5,7 @@ import { getCaseStudyPhotos } from '@/lib/case-study-photos';
 import { EditableField } from '@/components/case-studies/EditableField';
 import { RegenerateButton } from '@/components/case-studies/RegenerateButton';
 import { DraftCopyButton } from '@/components/case-studies/DraftCopyButton';
+import { GenerateSocialButton } from '@/components/case-studies/GenerateSocialButton';
 import { PhotosPanel } from '@/components/case-studies/PhotosPanel';
 import { PublishButton } from '@/components/case-studies/PublishButton';
 import { ResetWixButton } from '@/components/case-studies/ResetWixButton';
@@ -242,6 +243,21 @@ export default async function CaseStudyDetailPage({
             you&apos;re happy with the extracted spec above.
           </div>
         )}
+      </section>
+
+      <section>
+        <div className="flex items-end justify-between gap-4">
+          <div>
+            <h2 className="text-sm font-semibold uppercase tracking-wider text-neutral-500">
+              Social variants
+            </h2>
+            <p className="mt-1 text-xs text-neutral-500">
+              Fan this case study out into one draft post per platform configured for the brand.
+              Drafts land in <a href="/social" className="underline">Social</a> for review and scheduling.
+            </p>
+          </div>
+          <GenerateSocialButton caseStudyId={cs.id} />
+        </div>
       </section>
     </div>
   );

@@ -4,6 +4,7 @@ const NAV = [
   { href: '/', label: 'Overview' },
   { href: '/case-studies', label: 'Case Studies' },
   { href: '/emails', label: 'Emails' },
+  { href: '/social', label: 'Social' },
   { href: '/calendar', label: 'Calendar' },
 ];
 

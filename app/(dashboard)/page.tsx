@@ -20,17 +20,23 @@ const LIVE_MODULES: ModuleCard[] = [
       'Draft + push email campaigns to dotdigital. Address books, image library, templates and pre-flight checks all live here.',
   },
   {
+    href: '/social',
+    title: 'Social Posts',
+    description:
+      'Fan a case study or email out into one draft post per platform (Instagram, Facebook, TikTok, LinkedIn). Edit, schedule, publish.',
+  },
+  {
     href: '/calendar',
     title: 'Marketing Calendar',
     description:
-      'Month view of every campaign with a planned send date. Brand-coloured per row, sector tagged.',
+      'Month view of every campaign, case study and social post with a planned date. Brand-coloured per row, sector tagged.',
   },
 ];
 
 const COMING_LATER = [
   { title: 'Chimera Ingest', description: 'Prospect scraping → dotdigital address book sync.' },
   { title: 'Landing Pages', description: 'Wix Studio dynamic CMS pages bound to email campaigns.' },
-  { title: 'Content Creator', description: 'Social posts for the three brands.' },
+  { title: 'Social Scheduling', description: 'Push approved social drafts to Buffer / Metricool.' },
   { title: 'Marketing Planner', description: 'Sector-aware content calendar feeding everything else.' },
 ];
 
