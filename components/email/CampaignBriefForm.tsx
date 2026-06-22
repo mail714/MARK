@@ -17,6 +17,7 @@ type Props = {
     intent: string | null;
     address_book_ids: number[];
     template_key: string;
+    planned_send_at: string | null;
   };
 };
 
@@ -38,6 +39,13 @@ export function CampaignBriefForm({ campaignId, brands, addressBooks, initial }:
   const [sector, setSector] = useState(initial.sector ?? '');
   const [campaignType, setCampaignType] = useState(initial.campaign_type ?? '');
   const [templateKey, setTemplateKey] = useState(initial.template_key ?? 'simple-hero');
+  // The HTML datetime-local input wants 'YYYY-MM-DDTHH:mm' — slice the ISO
+  // string down to that shape, in local time. We round to the minute.
+  const [plannedSendAt, setPlannedSendAt] = useState(
+    initial.planned_send_at
+      ? new Date(initial.planned_send_at).toISOString().slice(0, 16)
+      : '',
+  );
   const [intent, setIntent] = useState(initial.intent ?? '');
   const [bookIds, setBookIds] = useState<number[]>(initial.address_book_ids);
   const [error, setError] = useState<string | null>(null);
@@ -154,6 +162,25 @@ export function CampaignBriefForm({ campaignId, brands, addressBooks, initial }:
           placeholder="What's the email about? e.g. Announce new 1200×1500mm acrylic boards for school sports honours"
           className="w-full rounded-md border border-neutral-200 bg-white px-3 py-2 text-sm shadow-sm focus:border-neutral-500 focus:outline-none"
         />
+      </Field>
+
+      <Field label="Planned send date" savingField={savingField} thisField="planned_send_at">
+        <input
+          type="datetime-local"
+          value={plannedSendAt}
+          onChange={(e) => setPlannedSendAt(e.target.value)}
+          onBlur={() => {
+            const iso = plannedSendAt ? new Date(plannedSendAt).toISOString() : null;
+            const initIso = initial.planned_send_at
+              ? new Date(initial.planned_send_at).toISOString()
+              : null;
+            if (iso !== initIso) save('planned_send_at', iso);
+          }}
+          className="w-full rounded-md border border-neutral-200 bg-white px-3 py-2 text-sm shadow-sm focus:border-neutral-500 focus:outline-none"
+        />
+        <p className="mt-1 text-[10px] text-neutral-500">
+          Drives where the campaign shows on the Marketing Calendar. Actual send timing happens in dotdigital after push.
+        </p>
       </Field>
 
       <div>

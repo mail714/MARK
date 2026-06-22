@@ -18,6 +18,7 @@ const EDITABLE_FIELDS = [
   'html_body',
   'hero_image_url',
   'hero_image_alt',
+  'planned_send_at',
   'brand_id',
   'status',
 ] as const;

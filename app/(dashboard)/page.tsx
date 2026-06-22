@@ -19,6 +19,12 @@ const LIVE_MODULES: ModuleCard[] = [
     description:
       'Draft + push email campaigns to dotdigital. Address books, image library, templates and pre-flight checks all live here.',
   },
+  {
+    href: '/calendar',
+    title: 'Marketing Calendar',
+    description:
+      'Month view of every campaign with a planned send date. Brand-coloured per row, sector tagged.',
+  },
 ];
 
 const COMING_LATER = [

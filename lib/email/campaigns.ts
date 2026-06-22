@@ -18,6 +18,7 @@ export type EmailCampaign = {
   html_body: string | null;
   hero_image_url: string | null;
   hero_image_alt: string | null;
+  planned_send_at: string | null;
   dotdigital_campaign_id: number | null;
   pushed_at: string | null;
   last_error: string | null;
@@ -38,6 +39,39 @@ export type EmailCampaignListItem = Pick<
   | 'updated_at'
   | 'pushed_at'
 >;
+
+// For the marketing calendar. Pulls every campaign with a planned_send_at
+// inside the given inclusive date range. Includes brand_id and sector so
+// the calendar can colour-code and label each entry by brand + sector.
+export type CalendarCampaign = Pick<
+  EmailCampaign,
+  | 'id'
+  | 'internal_name'
+  | 'subject'
+  | 'brand_id'
+  | 'sector'
+  | 'campaign_type'
+  | 'status'
+  | 'planned_send_at'
+  | 'address_book_ids'
+>;
+
+export async function listCampaignsForRange(
+  rangeStart: Date,
+  rangeEnd: Date,
+): Promise<CalendarCampaign[]> {
+  const supabase = createAdminClient();
+  const { data, error } = await supabase
+    .from('email_campaigns')
+    .select(
+      'id, internal_name, subject, brand_id, sector, campaign_type, status, planned_send_at, address_book_ids',
+    )
+    .gte('planned_send_at', rangeStart.toISOString())
+    .lte('planned_send_at', rangeEnd.toISOString())
+    .order('planned_send_at', { ascending: true });
+  if (error) throw new Error(`Failed to load calendar campaigns: ${error.message}`);
+  return (data as CalendarCampaign[]) ?? [];
+}
 
 export async function listCampaigns(): Promise<EmailCampaignListItem[]> {
   const supabase = createAdminClient();
@@ -92,6 +126,7 @@ const EDITABLE_FIELDS = [
   'html_body',
   'hero_image_url',
   'hero_image_alt',
+  'planned_send_at',
   'brand_id',
   'status',
 ] as const;

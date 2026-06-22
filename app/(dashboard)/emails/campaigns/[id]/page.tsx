@@ -90,6 +90,7 @@ export default async function CampaignDetailPage({
             intent: campaign.intent,
             address_book_ids: campaign.address_book_ids,
             template_key: campaign.template_key,
+            planned_send_at: campaign.planned_send_at,
           }}
         />
         <HeroImagePicker
