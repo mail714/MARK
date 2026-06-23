@@ -2,6 +2,7 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { getCaseStudy } from '@/lib/case-studies';
 import { getCaseStudyPhotos } from '@/lib/case-study-photos';
+import { countSocialPostsForSource } from '@/lib/social/posts';
 import { EditableField } from '@/components/case-studies/EditableField';
 import { RegenerateButton } from '@/components/case-studies/RegenerateButton';
 import { DraftCopyButton } from '@/components/case-studies/DraftCopyButton';
@@ -29,7 +30,10 @@ export default async function CaseStudyDetailPage({
   const { id } = await params;
   const cs = await getCaseStudy(id);
   if (!cs) notFound();
-  const photos = await getCaseStudyPhotos(id);
+  const [photos, existingSocialCount] = await Promise.all([
+    getCaseStudyPhotos(id),
+    countSocialPostsForSource('case-study', id),
+  ]);
 
   const status = STATUS_LABEL[cs.status] ?? STATUS_LABEL.pending;
 
@@ -70,6 +74,7 @@ export default async function CaseStudyDetailPage({
             hasCopy={!!cs.h1_introduction_text}
             hasPhotos={photos.some((p) => p.role === 'main') && photos.some((p) => p.role === 'image_2')}
             wixPublishedUrl={cs.wix_published_url}
+            existingSocialCount={existingSocialCount}
           />
           {cs.wix_item_id ? (
             <ResetWixButton caseStudyId={cs.id} hasWixItem={true} />
@@ -253,7 +258,7 @@ export default async function CaseStudyDetailPage({
             </h2>
             <p className="mt-1 text-xs text-neutral-500">
               Fan this case study out into one draft post per platform configured for the brand.
-              Drafts land in <a href="/social" className="underline">Social</a> for review and scheduling.
+              Drafts land in <Link href="/social" className="underline">Social</Link> for review and scheduling.
             </p>
           </div>
           <GenerateSocialButton caseStudyId={cs.id} />

@@ -99,6 +99,20 @@ export async function listSocialPostsForRange(
   return (data as SocialPost[]) ?? [];
 }
 
+export async function countSocialPostsForSource(
+  sourceType: SocialSourceType,
+  sourceId: string,
+): Promise<number> {
+  const supabase = createAdminClient();
+  const { count, error } = await supabase
+    .from('social_posts')
+    .select('id', { count: 'exact', head: true })
+    .eq('source_type', sourceType)
+    .eq('source_id', sourceId);
+  if (error) throw new Error(`Failed to count social posts: ${error.message}`);
+  return count ?? 0;
+}
+
 export async function updateSocialPost(
   id: string,
   fields: Partial<Pick<SocialPost, (typeof EDITABLE_FIELDS)[number]>>,

@@ -10,6 +10,10 @@ type Props = {
   hasCopy: boolean;
   hasPhotos: boolean;
   wixPublishedUrl: string | null;
+  // Number of social_posts already linked to this case study. Lets the
+  // post-publish prompt reflect whether this is a fresh case or a re-publish
+  // that already has drafts in /social waiting for review.
+  existingSocialCount: number;
 };
 
 type SocialState =
@@ -24,6 +28,7 @@ export function PublishButton({
   hasCopy,
   hasPhotos,
   wixPublishedUrl,
+  existingSocialCount,
 }: Props) {
   const router = useRouter();
   const [busy, setBusy] = useState(false);
@@ -132,11 +137,21 @@ export function PublishButton({
               Published ✓
             </div>
             <h2 className="mt-1 text-lg font-semibold tracking-tight">
-              Generate social posts?
+              {existingSocialCount > 0 ? 'Social posts already drafted' : 'Generate social posts?'}
             </h2>
             <p className="mt-1 text-sm text-neutral-600">
-              Fan this case study out into one draft post per platform configured for the brand.
-              Drafts land in Social for review and scheduling.
+              {existingSocialCount > 0 ? (
+                <>
+                  This case study already has {existingSocialCount} social post
+                  {existingSocialCount === 1 ? '' : 's'} from a previous run.
+                  Open Social to review or edit them, or generate another fresh batch alongside.
+                </>
+              ) : (
+                <>
+                  Fan this case study out into one draft post per platform configured for the brand.
+                  Drafts land in Social for review and scheduling.
+                </>
+              )}
             </p>
           </header>
 
@@ -165,6 +180,31 @@ export function PublishButton({
                   className="rounded-md border border-neutral-300 bg-white px-3 py-1.5 text-xs font-medium text-neutral-700 hover:bg-neutral-50"
                 >
                   Close
+                </button>
+                <Link
+                  href="/social"
+                  className="rounded-md bg-neutral-900 px-3 py-1.5 text-xs font-medium text-white hover:bg-neutral-700"
+                >
+                  Open Social →
+                </Link>
+              </>
+            ) : existingSocialCount > 0 ? (
+              <>
+                <button
+                  type="button"
+                  onClick={() => setSocialPromptOpen(false)}
+                  disabled={socialState.kind === 'drafting'}
+                  className="rounded-md border border-neutral-300 bg-white px-3 py-1.5 text-xs font-medium text-neutral-700 hover:bg-neutral-50 disabled:opacity-50"
+                >
+                  Not now
+                </button>
+                <button
+                  type="button"
+                  onClick={generateSocial}
+                  disabled={socialState.kind === 'drafting'}
+                  className="rounded-md border border-neutral-300 bg-white px-3 py-1.5 text-xs font-medium text-neutral-700 hover:bg-neutral-50 disabled:opacity-50"
+                >
+                  {socialState.kind === 'drafting' ? 'Drafting…' : 'Generate another batch'}
                 </button>
                 <Link
                   href="/social"
