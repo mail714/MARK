@@ -1,6 +1,7 @@
 import { createAdminClient } from '@/lib/supabase/admin';
 import { getCampaignSummary } from '@/lib/dotdigital/stats';
 import { getCampaign } from './campaigns';
+import { refreshCampaignLinks } from './link-clicks';
 
 export type CampaignStats = {
   campaign_id: string;
@@ -139,6 +140,17 @@ export async function refreshCampaignStats(campaignId: string): Promise<Campaign
     .from('email_campaign_stats')
     .upsert(row, { onConflict: 'campaign_id' });
   if (error) throw new Error(`Failed to save stats: ${error.message}`);
+
+  // Pull per-link clicks alongside the summary so one refresh covers both.
+  // A link sync failure shouldn't bin the summary refresh — log and continue.
+  try {
+    await refreshCampaignLinks(campaignId);
+  } catch (err) {
+    console.warn(
+      `Link click refresh failed for campaign ${campaignId}:`,
+      err instanceof Error ? err.message : err,
+    );
+  }
 
   return row as CampaignStats;
 }

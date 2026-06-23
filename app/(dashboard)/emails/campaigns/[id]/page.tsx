@@ -4,6 +4,7 @@ import { getCampaign } from '@/lib/email/campaigns';
 import { getAddressBooks } from '@/lib/email/address-books';
 import { listBrands } from '@/lib/brands';
 import { getCampaignStats } from '@/lib/email/stats';
+import { getCampaignLinks } from '@/lib/email/link-clicks';
 import { getBrandInsights } from '@/lib/email/insights';
 import { CampaignBriefForm } from '@/components/email/CampaignBriefForm';
 import { CampaignStatsPanel } from '@/components/email/CampaignStatsPanel';
@@ -13,6 +14,7 @@ import { EmailPreview } from '@/components/email/EmailPreview';
 import { GenerateSocialButton } from '@/components/email/GenerateSocialButton';
 import { HeroImagePicker } from '@/components/email/HeroImagePicker';
 import { InsightsPanel } from '@/components/email/InsightsPanel';
+import { LinkClicksPanel } from '@/components/email/LinkClicksPanel';
 import { PreflightPanel } from '@/components/email/PreflightPanel';
 import { PushButton } from '@/components/email/PushButton';
 import { RefreshStatsButton } from '@/components/email/RefreshStatsButton';
@@ -33,11 +35,12 @@ export default async function CampaignDetailPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
-  const [campaign, books, brands, stats] = await Promise.all([
+  const [campaign, books, brands, stats, links] = await Promise.all([
     getCampaign(id),
     getAddressBooks(),
     listBrands(),
     getCampaignStats(id),
+    getCampaignLinks(id),
   ]);
   if (!campaign) notFound();
 
@@ -218,6 +221,18 @@ export default async function CampaignDetailPage({
             <RefreshStatsButton campaignId={campaign.id} />
           </div>
           <CampaignStatsPanel stats={stats} />
+          <div className="pt-2">
+            <h3 className="text-xs font-medium uppercase tracking-wider text-neutral-500">
+              Link clicks
+            </h3>
+            <p className="mt-0.5 text-[10px] text-neutral-500">
+              Which links readers actually tapped, ranked by unique clickers.
+              &quot;% of openers&quot; tells you the click-through rate per link.
+            </p>
+            <div className="mt-2">
+              <LinkClicksPanel links={links} uniqueOpens={stats?.num_unique_opens ?? null} />
+            </div>
+          </div>
         </section>
       ) : null}
 
