@@ -3,7 +3,9 @@ import { notFound } from 'next/navigation';
 import { getCampaign } from '@/lib/email/campaigns';
 import { getAddressBooks } from '@/lib/email/address-books';
 import { listBrands } from '@/lib/brands';
+import { getCampaignStats } from '@/lib/email/stats';
 import { CampaignBriefForm } from '@/components/email/CampaignBriefForm';
+import { CampaignStatsPanel } from '@/components/email/CampaignStatsPanel';
 import { DraftEmailButton } from '@/components/email/DraftEmailButton';
 import { EditableCampaignField } from '@/components/email/EditableCampaignField';
 import { EmailPreview } from '@/components/email/EmailPreview';
@@ -11,6 +13,7 @@ import { GenerateSocialButton } from '@/components/email/GenerateSocialButton';
 import { HeroImagePicker } from '@/components/email/HeroImagePicker';
 import { PreflightPanel } from '@/components/email/PreflightPanel';
 import { PushButton } from '@/components/email/PushButton';
+import { RefreshStatsButton } from '@/components/email/RefreshStatsButton';
 import { canPush, runPreflight } from '@/lib/email/preflight';
 
 export const dynamic = 'force-dynamic';
@@ -28,10 +31,11 @@ export default async function CampaignDetailPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
-  const [campaign, books, brands] = await Promise.all([
+  const [campaign, books, brands, stats] = await Promise.all([
     getCampaign(id),
     getAddressBooks(),
     listBrands(),
+    getCampaignStats(id),
   ]);
   if (!campaign) notFound();
 
@@ -176,6 +180,24 @@ export default async function CampaignDetailPage({
         </div>
         <PreflightPanel checks={runPreflight(campaign)} />
       </section>
+
+      {campaign.dotdigital_campaign_id ? (
+        <section className="space-y-3">
+          <div className="flex items-end justify-between gap-3">
+            <div>
+              <h2 className="text-sm font-semibold uppercase tracking-wider text-neutral-500">
+                Reporting
+              </h2>
+              <p className="mt-1 text-xs text-neutral-500">
+                Pulled from dotdigital after the campaign sends. Opens and click rates are
+                shown over delivered (sent minus bounced).
+              </p>
+            </div>
+            <RefreshStatsButton campaignId={campaign.id} />
+          </div>
+          <CampaignStatsPanel stats={stats} />
+        </section>
+      ) : null}
 
       <section className="space-y-3">
         <div className="flex items-end justify-between gap-3">
