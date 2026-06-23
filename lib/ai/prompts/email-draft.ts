@@ -23,6 +23,10 @@ export type EmailDraftContext = {
   heroImageUrl: string | null;
   heroImageAlt: string | null;
   libraryImages: { url: string; altText: string | null; sector: string | null }[];
+  // Compact summary of how past campaigns for this brand+sector have
+  // performed. Null when there's no stats data yet — the drafter falls
+  // back to brand voice rules + the brief.
+  pastPerformance: string | null;
 };
 
 export const SYSTEM_PROMPT = `You are a senior copywriter drafting marketing emails for one of Signet's three brands: Honours Boards (honours-boards.co.uk), Signet Signs (signetsigns.co.uk) or Signet Play (signet-play.co.uk).
@@ -231,6 +235,11 @@ export async function buildUserMessage(
       'No voice anchors set yet. Lean harder on the brand voice rules in the system prompt and keep cadence rules tight.',
       '',
     );
+  }
+
+  if (ctx.pastPerformance) {
+    lines.push(ctx.pastPerformance);
+    lines.push('');
   }
 
   lines.push('## Brief for THIS email');

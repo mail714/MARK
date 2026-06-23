@@ -1,6 +1,7 @@
 import { createAdminClient } from '@/lib/supabase/admin';
 import { getCampaign, updateCampaign } from './campaigns';
 import { listEmailImages, pickHeroImage } from './images';
+import { getBrandInsights, insightsToPromptBlock } from './insights';
 import { draftEmail } from '@/lib/ai/draft-email';
 import { getTemplate } from './templates';
 import { paletteForBrand } from './templates/brand-palettes';
@@ -88,6 +89,22 @@ export async function draftCampaignCopy(campaignId: string): Promise<void> {
   const template = getTemplate(cs.template_key);
   const palette = paletteForBrand(brandSlug);
 
+  // Past performance digest seeded from email_campaign_stats. Sector-specific
+  // when we have one set; otherwise brand-wide. Silently no-ops when stats
+  // are missing — the prompt builder skips the block in that case.
+  let pastPerformance: string | null = null;
+  if (cs.brand_id) {
+    try {
+      const insights = await getBrandInsights(cs.brand_id, cs.sector);
+      if (insights.campaignsCount > 0) {
+        pastPerformance = insightsToPromptBlock(insights);
+      }
+    } catch {
+      // Don't let a stats outage block drafting — fall through with null.
+      pastPerformance = null;
+    }
+  }
+
   try {
     const result = await draftEmail(
       {
@@ -100,6 +117,7 @@ export async function draftCampaignCopy(campaignId: string): Promise<void> {
         heroImageUrl: heroUrl,
         heroImageAlt: heroAlt,
         libraryImages,
+        pastPerformance,
       },
       template,
     );

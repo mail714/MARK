@@ -4,6 +4,7 @@ import { getCampaign } from '@/lib/email/campaigns';
 import { getAddressBooks } from '@/lib/email/address-books';
 import { listBrands } from '@/lib/brands';
 import { getCampaignStats } from '@/lib/email/stats';
+import { getBrandInsights } from '@/lib/email/insights';
 import { CampaignBriefForm } from '@/components/email/CampaignBriefForm';
 import { CampaignStatsPanel } from '@/components/email/CampaignStatsPanel';
 import { DraftEmailButton } from '@/components/email/DraftEmailButton';
@@ -11,6 +12,7 @@ import { EditableCampaignField } from '@/components/email/EditableCampaignField'
 import { EmailPreview } from '@/components/email/EmailPreview';
 import { GenerateSocialButton } from '@/components/email/GenerateSocialButton';
 import { HeroImagePicker } from '@/components/email/HeroImagePicker';
+import { InsightsPanel } from '@/components/email/InsightsPanel';
 import { PreflightPanel } from '@/components/email/PreflightPanel';
 import { PushButton } from '@/components/email/PushButton';
 import { RefreshStatsButton } from '@/components/email/RefreshStatsButton';
@@ -38,6 +40,12 @@ export default async function CampaignDetailPage({
     getCampaignStats(id),
   ]);
   if (!campaign) notFound();
+
+  // Pull insights for the brand+sector so the panel reflects what the drafter
+  // sees. Swallow errors — it's secondary and should never block the page.
+  const insights = campaign.brand_id
+    ? await getBrandInsights(campaign.brand_id, campaign.sector).catch(() => null)
+    : null;
 
   const status = STATUS_LABEL[campaign.status] ?? STATUS_LABEL.draft;
   const brandsBare = brands.map((b) => ({ id: b.id, slug: b.slug, name: b.name }));
@@ -104,6 +112,20 @@ export default async function CampaignDetailPage({
           selectedAlt={campaign.hero_image_alt}
           defaultSector={campaign.sector}
         />
+      </section>
+
+      <section className="space-y-3">
+        <div>
+          <h2 className="text-sm font-semibold uppercase tracking-wider text-neutral-500">
+            Insights
+          </h2>
+          <p className="mt-1 text-xs text-neutral-500">
+            What the drafter sees about past performance for this brand
+            {campaign.sector ? ` and sector "${campaign.sector}"` : ''}.
+            Set the brand and sector above to populate.
+          </p>
+        </div>
+        <InsightsPanel insights={insights} />
       </section>
 
       <section className="space-y-3">
