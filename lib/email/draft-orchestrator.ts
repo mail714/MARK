@@ -118,6 +118,7 @@ export async function draftCampaignCopy(campaignId: string): Promise<void> {
         heroImageAlt: heroAlt,
         libraryImages,
         pastPerformance,
+        campaignId: cs.id,
       },
       template,
     );
@@ -128,6 +129,11 @@ export async function draftCampaignCopy(campaignId: string): Promise<void> {
       brandPalette: palette,
       heroImageUrl: heroUrl,
       heroImageAlt: heroAlt,
+    });
+
+    fields.html_body = ensureUtmOnEveryLink(fields.html_body, {
+      campaignId: cs.id,
+      campaignType: cs.campaign_type ?? 'newsletter',
     });
 
     await updateCampaign(campaignId, {
@@ -143,5 +149,43 @@ export async function draftCampaignCopy(campaignId: string): Promise<void> {
       .update({ last_error: `Draft failed: ${message}` })
       .eq('id', campaignId);
     throw err;
+  }
+}
+
+
+// Belt-and-braces: walk every <a href> and make sure it has the four UTM
+// params. The drafter is told to add them but a server-side check keeps
+// the link-clicks report honest even when the model misses one.
+function ensureUtmOnEveryLink(
+  html: string,
+  args: { campaignId: string; campaignType: string },
+): string {
+  const required = {
+    utm_source: 'email',
+    utm_medium: args.campaignType,
+    utm_campaign: args.campaignId,
+  };
+  return html.replace(/<a\b([^>]*?)href=(["'])([^"']+)\2/gi, (_full, pre, quote, url) => {
+    const tagged = stampUtm(url, required);
+    return `<a${pre}href=${quote}${tagged}${quote}`;
+  });
+}
+
+function stampUtm(
+  url: string,
+  required: { utm_source: string; utm_medium: string; utm_campaign: string },
+): string {
+  // mailto: / tel: / # / unsubscribe placeholders — leave alone.
+  if (/^(mailto:|tel:|#)/i.test(url)) return url;
+  try {
+    const u = new URL(url);
+    for (const [k, v] of Object.entries(required)) {
+      if (!u.searchParams.has(k)) u.searchParams.set(k, v);
+    }
+    // Stamp a fallback utm_content only if the drafter forgot one entirely.
+    if (!u.searchParams.has('utm_content')) u.searchParams.set('utm_content', 'unlabelled');
+    return u.toString();
+  } catch {
+    return url;
   }
 }

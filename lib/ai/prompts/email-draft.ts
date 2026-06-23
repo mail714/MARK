@@ -27,6 +27,9 @@ export type EmailDraftContext = {
   // performed. Null when there's no stats data yet — the drafter falls
   // back to brand voice rules + the brief.
   pastPerformance: string | null;
+  // Campaign id passed in so the drafter can stamp utm_campaign on every
+  // link without us having to post-process the HTML.
+  campaignId: string;
 };
 
 export const SYSTEM_PROMPT = `You are a senior copywriter drafting marketing emails for one of Signet's three brands: Honours Boards (honours-boards.co.uk), Signet Signs (signetsigns.co.uk) or Signet Play (signet-play.co.uk).
@@ -159,6 +162,30 @@ For supporting inline images (rare), the same rule applies: the brief will list 
 
 The CTA button colour above (#2a4ea0) is a sensible neutral default. Do not invent brand colours you weren't told. If the brand context names a specific accent in the brief, use it; otherwise leave the default.
 
+# Link tracking — REQUIRED on every link
+
+Every \`<a href>\` in the body MUST have UTM tracking parameters appended to its destination URL. This is how we measure which links in the email actually got clicked.
+
+Format (append to the URL):
+\`?utm_source=email&utm_medium={campaign_type}&utm_campaign={campaign_id}&utm_content={purpose}\`
+
+The brief tells you campaign_type and campaign_id. Use them VERBATIM — do not rewrite them.
+
+\`utm_content\` is YOUR choice — a short lowercase-kebab slug describing what the link is for. Examples:
+- \`hero-cta\` — the main CTA button
+- \`secondary-cta\` — a secondary text link near the main one
+- \`inline-mention\` — a link inside a body paragraph
+- \`section-1-cta\`, \`section-2-cta\`, \`section-3-cta\` — section CTAs in the multi-section template
+- \`footer-website\` — the 'visit website' link in the footer
+- \`signoff\` — a name or contact link in the signoff
+
+Each link MUST have a different \`utm_content\` value — that's how dotdigital reports them separately, even when two links point at the same page.
+
+If the URL already has a query string, append the UTMs with \`&\` instead of \`?\`. Do not double-encode. Leave fragments (\`#anchor\`) at the very end of the URL — UTMs go before any fragment.
+
+Example with a clean URL:
+\`<a href="https://www.honoursboards.co.uk/case-studies/repton-school?utm_source=email&utm_medium=newsletter&utm_campaign=01J9X…&utm_content=hero-cta" ...>Read the full case study</a>\`
+
 # Output
 
 Use the \`emit_email\` tool to return the three fields. Subject and preheader are plain text. html_body is HTML.`;
@@ -247,6 +274,8 @@ export async function buildUserMessage(
   if (ctx.sector) lines.push(`Sector / audience: ${ctx.sector}`);
   if (ctx.campaignType) lines.push(`Campaign type: ${ctx.campaignType}`);
   if (ctx.audienceDescription) lines.push(`Audience books selected: ${ctx.audienceDescription}`);
+  lines.push(`campaign_id (for utm_campaign on every link): ${ctx.campaignId}`);
+  lines.push(`campaign_type (for utm_medium on every link): ${ctx.campaignType ?? 'newsletter'}`);
 
   lines.push('');
   if (ctx.heroImageUrl) {

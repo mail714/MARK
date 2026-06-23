@@ -230,7 +230,11 @@ export default async function CampaignDetailPage({
               &quot;% of openers&quot; tells you the click-through rate per link.
             </p>
             <div className="mt-2">
-              <LinkClicksPanel links={links} uniqueOpens={stats?.num_unique_opens ?? null} />
+              <LinkClicksPanel
+                links={links}
+                uniqueOpens={stats?.num_unique_opens ?? null}
+                htmlBody={campaign.html_body}
+              />
             </div>
           </div>
         </section>
