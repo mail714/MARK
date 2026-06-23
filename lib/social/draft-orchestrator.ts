@@ -1,6 +1,7 @@
 import { createAdminClient } from '@/lib/supabase/admin';
 import { getCaseStudy } from '@/lib/case-studies';
 import { getCaseStudyPhotos } from '@/lib/case-study-photos';
+import { getCampaign } from '@/lib/email/campaigns';
 import { draftSocialPosts } from '@/lib/ai/draft-social';
 import { createSocialPost } from './posts';
 import { getBrandSocialAccounts } from './accounts';
@@ -122,6 +123,127 @@ export async function generateSocialPostsFromCaseStudy(
       media_kind: post.media_kind ?? null,
       shot_brief: post.shot_brief?.trim() ? post.shot_brief.trim() : null,
       cta_url: cs.wix_published_url,
+    });
+    created.push(id);
+  }
+
+  return { created, platforms };
+}
+
+// Strips HTML to a flat text version the AI can read as prose. Not a full
+// sanitiser — just removes tags and collapses whitespace. Good enough as
+// drafter context.
+function htmlToProse(html: string | null): string {
+  if (!html) return '';
+  return html
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function summariseCampaign(c: Awaited<ReturnType<typeof getCampaign>>): string {
+  if (!c) return '';
+  const parts: string[] = [];
+  if (c.internal_name) parts.push(`Internal name: ${c.internal_name}`);
+  if (c.campaign_type) parts.push(`Type: ${c.campaign_type}`);
+  if (c.subject) parts.push(`Subject: ${c.subject}`);
+  if (c.preheader) parts.push(`Preheader: ${c.preheader}`);
+  if (c.intent) {
+    parts.push('');
+    parts.push('Brief:');
+    parts.push(c.intent);
+  }
+  const body = htmlToProse(c.html_body);
+  if (body) {
+    parts.push('');
+    parts.push('Email body (prose):');
+    parts.push(body.length > 2000 ? `${body.slice(0, 2000)}…` : body);
+  }
+  return parts.join('\n');
+}
+
+export async function generateSocialPostsFromEmailCampaign(
+  campaignId: string,
+): Promise<{ created: string[]; platforms: SocialPlatform[] }> {
+  const c = await getCampaign(campaignId);
+  if (!c) throw new Error(`Campaign ${campaignId} not found`);
+
+  const supabase = createAdminClient();
+  type BrandRow = Pick<Brand, 'id' | 'slug' | 'name' | 'website_url'>;
+  let brand: BrandRow | null = null;
+  if (c.brand_id) {
+    const { data } = await supabase
+      .from('brands')
+      .select('id, slug, name, website_url')
+      .eq('id', c.brand_id)
+      .maybeSingle();
+    brand = (data as BrandRow | null) ?? null;
+  }
+
+  const platforms = platformsForBrand(brand?.slug);
+  if (platforms.length === 0) {
+    throw new Error(
+      `No social platforms configured for brand ${brand?.slug ?? '(unset)'}. Set the brand on the campaign first.`,
+    );
+  }
+
+  const accounts = brand ? await getBrandSocialAccounts(brand.id) : [];
+  const accountsByPlatform = new Map(accounts.map((a) => [a.platform, a]));
+
+  const availableMedia = c.hero_image_url
+    ? [{ url: c.hero_image_url, alt: c.hero_image_alt ?? null }]
+    : [];
+
+  const title = c.internal_name ?? c.subject ?? '(untitled campaign)';
+
+  const result = await draftSocialPosts({
+    brandName: brand?.name ?? null,
+    brandWebsite: brand?.website_url ?? null,
+    sector: c.sector,
+    platforms,
+    accounts: platforms.map((p) => {
+      const a = accountsByPlatform.get(p);
+      return {
+        platform: p,
+        handle: a?.handle ?? null,
+        profile_url: a?.profile_url ?? null,
+      };
+    }),
+    source: {
+      type: 'email',
+      title,
+      summary: summariseCampaign(c),
+      detailUrl: null,
+    },
+    availableMedia,
+  });
+
+  const created: string[] = [];
+  for (const post of result.posts) {
+    if (!platforms.includes(post.platform)) continue;
+    const id = await createSocialPost({
+      brand_id: c.brand_id ?? null,
+      platform: post.platform,
+      source_type: 'email',
+      source_id: c.id,
+      sector: c.sector,
+      internal_name: title,
+      caption: post.caption,
+      hashtags: post.hashtags ?? [],
+      media_urls: post.media_picks ?? [],
+      media_alts: (post.media_picks ?? []).map((url) => {
+        const m = availableMedia.find((x) => x.url === url);
+        return m?.alt ?? '';
+      }),
+      media_kind: post.media_kind ?? null,
+      shot_brief: post.shot_brief?.trim() ? post.shot_brief.trim() : null,
+      // Emails don't have a public URL — leave cta_url null so the operator
+      // can paste in the landing page link (or the brand site) themselves.
+      cta_url: null,
     });
     created.push(id);
   }

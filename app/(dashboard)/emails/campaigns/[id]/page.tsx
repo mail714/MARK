@@ -7,6 +7,7 @@ import { CampaignBriefForm } from '@/components/email/CampaignBriefForm';
 import { DraftEmailButton } from '@/components/email/DraftEmailButton';
 import { EditableCampaignField } from '@/components/email/EditableCampaignField';
 import { EmailPreview } from '@/components/email/EmailPreview';
+import { GenerateSocialButton } from '@/components/email/GenerateSocialButton';
 import { HeroImagePicker } from '@/components/email/HeroImagePicker';
 import { PreflightPanel } from '@/components/email/PreflightPanel';
 import { PushButton } from '@/components/email/PushButton';
@@ -161,7 +162,7 @@ export default async function CampaignDetailPage({
             </h2>
             <p className="mt-1 text-xs text-neutral-500">
               Pre-flight runs subject / preheader / body / spam / audience
-              checks. Once everything's green or amber, pushing creates a
+              checks. Once everything&apos;s green or amber, pushing creates a
               draft campaign in dotdigital where you do final review and
               schedule the send.
             </p>
@@ -174,6 +175,21 @@ export default async function CampaignDetailPage({
           />
         </div>
         <PreflightPanel checks={runPreflight(campaign)} />
+      </section>
+
+      <section className="space-y-3">
+        <div className="flex items-end justify-between gap-3">
+          <div>
+            <h2 className="text-sm font-semibold uppercase tracking-wider text-neutral-500">
+              Social variants
+            </h2>
+            <p className="mt-1 text-xs text-neutral-500">
+              Fan this campaign out into one draft post per platform configured for the brand.
+              Drafts land in <Link href="/social" className="underline">Social</Link> for review and scheduling.
+            </p>
+          </div>
+          <GenerateSocialButton campaignId={campaign.id} />
+        </div>
       </section>
     </div>
   );
