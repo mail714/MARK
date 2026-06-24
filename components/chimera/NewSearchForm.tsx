@@ -9,13 +9,28 @@ export function NewSearchForm() {
   const [location, setLocation] = useState('');
   const [categoryKey, setCategoryKey] = useState<string>('restaurant');
   const [customCategory, setCustomCategory] = useState('');
-  const [radius, setRadius] = useState(1500);
+  const [radiusValue, setRadiusValue] = useState(1500);
+  const [radiusUnit, setRadiusUnit] = useState<'m' | 'mi'>('m');
   const [overlap, setOverlap] = useState(40);
   const [maxResults, setMaxResults] = useState(500);
   const [chainFilterOverride, setChainFilterOverride] = useState<boolean | null>(null);
   const [pullCompaniesHouse, setPullCompaniesHouse] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const METRES_PER_MILE = 1609.344;
+  const radiusInMetres =
+    radiusUnit === 'mi' ? Math.round(radiusValue * METRES_PER_MILE) : Math.round(radiusValue);
+
+  function switchUnit(next: 'm' | 'mi') {
+    if (next === radiusUnit) return;
+    if (next === 'mi') {
+      setRadiusValue(Math.round((radiusValue / METRES_PER_MILE) * 100) / 100);
+    } else {
+      setRadiusValue(Math.round(radiusValue * METRES_PER_MILE));
+    }
+    setRadiusUnit(next);
+  }
 
   const isCustom = categoryKey === 'custom';
   const category: ChimeraCategory | null = useMemo(() => {
@@ -49,7 +64,7 @@ export function NewSearchForm() {
         search_mode: 'grid',
         category: c,
         category_label: c,
-        grid_radius_m: radius,
+        grid_radius_m: radiusInMetres,
         grid_overlap_pct: overlap,
         max_results: maxResults,
         apply_chain_filter: applyChainFilter,
@@ -72,7 +87,7 @@ export function NewSearchForm() {
         search_mode: 'grid',
         category: cat,
         category_label: category.label,
-        grid_radius_m: radius,
+        grid_radius_m: radiusInMetres,
         grid_overlap_pct: overlap,
         max_results: maxResults,
         apply_chain_filter: applyChainFilter,
@@ -100,7 +115,10 @@ export function NewSearchForm() {
 
   return (
     <div className="space-y-4 rounded-lg border border-neutral-200 bg-white p-5">
-      <Field label="Location">
+      <Field
+        label="Location"
+        hint="A town, city or postcode area to search around. Google geocodes it into a bounding box, and the grid covers everything inside that box. You can be vague (Bristol) or specific (BS34 area). UK locations work best — the search defaults to GB."
+      >
         <input
           type="text"
           value={location}
@@ -110,7 +128,10 @@ export function NewSearchForm() {
         />
       </Field>
 
-      <Field label="Category">
+      <Field
+        label="Category"
+        hint="Standard = a strict Google place type (restaurant, school, etc.). Estate sweep = two-stage search: first finds every business park / office building / retail park, then enumerates every business inside each. Property services = keyword search for managing agents / facilities firms. Custom = free-text keyword for anything else."
+      >
         <select
           value={categoryKey}
           onChange={(e) => {
@@ -145,7 +166,10 @@ export function NewSearchForm() {
       </Field>
 
       {isCustom ? (
-        <Field label="Custom keyword">
+        <Field
+          label="Custom keyword"
+          hint="A free-text business type sent as Google's keyword parameter. Less strict than a place type — Google fuzzy-matches the phrase against business names and types. Good for niches not in the dropdown (plumber, florist, dental practice, etc.)."
+        >
           <input
             type="text"
             value={customCategory}
@@ -158,19 +182,48 @@ export function NewSearchForm() {
 
       {showGridKnobs ? (
         <div className="grid gap-3 sm:grid-cols-3">
-          <Field label="Grid radius (m)">
-            <input
-              type="number"
-              min={500}
-              max={20000}
-              step={100}
-              value={radius}
-              onChange={(e) => setRadius(parseInt(e.target.value, 10) || 1500)}
-              className="w-full rounded-md border border-neutral-200 bg-white px-3 py-2 text-sm shadow-sm focus:border-neutral-500 focus:outline-none"
-            />
-            <p className="mt-0.5 text-[10px] text-neutral-500">Smaller = more cells, more coverage.</p>
+          <Field
+            label="Grid radius"
+            hint="The size of each circular search area in the grid. Google caps Nearby Search at 60 results per circle, so a city is covered by many overlapping circles. Smaller radius = more circles, more API calls, but better coverage in dense areas. 1500m (~0.9mi) is the safe default for UK towns; drop to 800-1000m for city centres."
+          >
+            <div className="flex items-stretch overflow-hidden rounded-md border border-neutral-200 bg-white shadow-sm focus-within:border-neutral-500">
+              <input
+                type="number"
+                min={radiusUnit === 'mi' ? 0.3 : 500}
+                max={radiusUnit === 'mi' ? 12 : 20000}
+                step={radiusUnit === 'mi' ? 0.1 : 100}
+                value={radiusValue}
+                onChange={(e) => setRadiusValue(parseFloat(e.target.value) || 0)}
+                className="w-full px-3 py-2 text-sm focus:outline-none"
+              />
+              <div className="flex shrink-0 border-l border-neutral-200 text-[10px] font-medium uppercase tracking-wider">
+                <button
+                  type="button"
+                  onClick={() => switchUnit('m')}
+                  className={`px-2 ${radiusUnit === 'm' ? 'bg-neutral-900 text-white' : 'bg-white text-neutral-500 hover:bg-neutral-100'}`}
+                >
+                  m
+                </button>
+                <button
+                  type="button"
+                  onClick={() => switchUnit('mi')}
+                  className={`px-2 ${radiusUnit === 'mi' ? 'bg-neutral-900 text-white' : 'bg-white text-neutral-500 hover:bg-neutral-100'}`}
+                >
+                  mi
+                </button>
+              </div>
+            </div>
+            <p className="mt-0.5 text-[10px] text-neutral-500">
+              {radiusUnit === 'mi'
+                ? `≈ ${radiusInMetres.toLocaleString('en-GB')} m per circle`
+                : `≈ ${(radiusInMetres / METRES_PER_MILE).toFixed(2)} miles per circle`}
+              . Smaller = more cells, more coverage.
+            </p>
           </Field>
-          <Field label="Overlap %">
+          <Field
+            label="Overlap %"
+            hint="How much adjacent search circles overlap. 0% leaves gaps at the seams where businesses get missed. 40% is the safe default — fully covers boundaries without much redundancy. Higher than 60% wastes API calls re-searching the same area."
+          >
             <input
               type="number"
               min={0}
@@ -182,7 +235,10 @@ export function NewSearchForm() {
             />
             <p className="mt-0.5 text-[10px] text-neutral-500">40% avoids gaps at edges.</p>
           </Field>
-          <Field label="Max results">
+          <Field
+            label="Max results"
+            hint="Hard cap on how many unique businesses the grid will collect before stopping. Useful for test runs (set to 50) or when you want to limit Google API spend on a big city. The grid still runs to find the cap quickly — it doesn't enumerate every cell."
+          >
             <input
               type="number"
               min={10}
@@ -195,7 +251,10 @@ export function NewSearchForm() {
           </Field>
         </div>
       ) : (
-        <Field label="Max results">
+        <Field
+          label="Max results"
+          hint="Hard cap on tenants enumerated across all found sites. The sweep finds every park / building first then visits them one at a time; once this many tenants have been collected the sweep stops."
+        >
           <input
             type="number"
             min={10}
@@ -216,6 +275,7 @@ export function NewSearchForm() {
         />
         Skip large chains (restaurants, pubs, hotels). Default for this category:{' '}
         <strong>{defaultChainFilter ? 'on' : 'off'}</strong>.
+        <InfoIcon hint="Drops businesses whose name or website domain matches a curated list of UK chains (McDonald's, Pizza Hut, Greggs, Premier Inn etc.), with a reviews-count threshold so independent restaurants don't get caught. Defaults to on for hospitality categories where chains dominate, off for schools / business parks where you'd want the chains too." />
       </label>
 
       {mode === 'estate-sweep' ? (
@@ -232,6 +292,7 @@ export function NewSearchForm() {
             listing. Adds SIC industry codes. No emails (Companies House doesn&apos;t expose
             contact details), but reveals who&apos;s on the estate.
           </span>
+          <InfoIcon hint="After the Google sweep finishes, every confirmed postcode is sent to the Companies House API to fetch every active registered business at that exact postcode. Matches against existing prospects by name + postcode (so duplicates enrich rather than insert). Requires COMPANIES_HOUSE_API_KEY in env. Rate-limited to 600 requests per 5 minutes — well within typical sweep volume." />
         </label>
       ) : null}
 
@@ -250,13 +311,37 @@ export function NewSearchForm() {
   );
 }
 
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
+function Field({
+  label,
+  hint,
+  children,
+}: {
+  label: string;
+  hint?: string;
+  children: React.ReactNode;
+}) {
   return (
     <div>
-      <label className="block text-xs font-medium uppercase tracking-wider text-neutral-500">
-        {label}
-      </label>
+      <div className="flex items-center gap-1.5">
+        <label className="block text-xs font-medium uppercase tracking-wider text-neutral-500">
+          {label}
+        </label>
+        {hint ? <InfoIcon hint={hint} /> : null}
+      </div>
       <div className="mt-1">{children}</div>
     </div>
+  );
+}
+
+function InfoIcon({ hint }: { hint: string }) {
+  return (
+    <span
+      title={hint}
+      role="img"
+      aria-label={hint}
+      className="inline-flex h-3.5 w-3.5 cursor-help items-center justify-center rounded-full bg-neutral-200 text-[9px] font-bold text-neutral-600 hover:bg-neutral-300"
+    >
+      i
+    </span>
   );
 }
