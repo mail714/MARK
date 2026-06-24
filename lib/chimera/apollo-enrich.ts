@@ -19,7 +19,8 @@ export type ApolloContact = {
 
 function projectPerson(p: ApolloPerson): ApolloContact {
   const email = isUsableEmail(p.email) ? p.email.toLowerCase() : null;
-  const phone = p.phone_numbers?.[0]?.sanitized_number ?? p.phone_numbers?.[0]?.raw_number ?? null;
+  const phone =
+    p.phone_numbers?.[0]?.sanitized_number ?? p.phone_numbers?.[0]?.raw_number ?? null;
   return {
     name: fullName(p) || '(unknown)',
     title: p.title ?? null,
@@ -41,6 +42,10 @@ export type EnrichResult = {
 // available, else by business_name (used for Companies House rows that
 // have no domain). Already-enriched prospects are skipped unless force=true
 // so re-runs don't burn Apollo credits unnecessarily.
+//
+// One Apollo search call per prospect. Each returned contact with an
+// unlocked email costs 1 credit; locked contacts (placeholder emails) are
+// free — we still keep their names + titles for the operator.
 export async function enrichProspectsWithApollo(args: {
   prospectIds: string[];
   perPage?: number;
@@ -72,7 +77,7 @@ export async function enrichProspectsWithApollo(args: {
     source: string;
   }>) {
     if (!args.force && p.apollo_enriched_at) {
-      continue; // skip prospects already enriched
+      continue;
     }
 
     result.prospectsTried += 1;
@@ -87,9 +92,7 @@ export async function enrichProspectsWithApollo(args: {
       const contacts = people.map(projectPerson);
 
       // Merge Apollo emails into the existing emails array, deduped.
-      const apolloEmails = contacts
-        .map((c) => c.email)
-        .filter((e): e is string => !!e);
+      const apolloEmails = contacts.map((c) => c.email).filter((e): e is string => !!e);
       const before = new Set(p.emails.map((e) => e.toLowerCase()));
       const merged = [...p.emails];
       let added = 0;

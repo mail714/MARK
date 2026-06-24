@@ -1,6 +1,6 @@
 // Apollo.io REST API client. Authenticates via x-api-key header. The free
-// tier gives 200 export credits per month — one credit per contact
-// returned — so callers should keep per_page tight (2-3) by default.
+// tier gives 200 export credits per month — each unlocked contact returned
+// is one credit — so callers keep per_page tight (2-3) by default.
 
 const BASE_URL = 'https://api.apollo.io';
 
@@ -35,7 +35,7 @@ async function request<T>(path: string, body: Record<string, unknown>): Promise<
   }
   if (res.status === 402 || res.status === 403) {
     throw new ApolloError(
-      'Apollo refused the request — out of credits, or this endpoint isn\'t on your plan.',
+      "Apollo refused the request — out of credits, or this endpoint isn't enabled on your API key.",
       res.status,
     );
   }
@@ -50,7 +50,7 @@ async function request<T>(path: string, body: Record<string, unknown>): Promise<
 }
 
 export type ApolloPerson = {
-  id: string;
+  id?: string;
   first_name?: string;
   last_name?: string;
   name?: string;
@@ -67,19 +67,35 @@ type PeopleSearchResponse = {
   pagination?: { total_entries?: number };
 };
 
+// Apollo's people search. The endpoint was renamed from /mixed_people/search
+// to /mixed_people/api_search in their 2025 API refresh. Returns the top N
+// people at the queried organization, biased by the seniority filter to
+// pull decision-makers first.
+const PEOPLE_SEARCH_PATH = '/v1/mixed_people/api_search';
+
+const DECISION_MAKER_SENIORITIES = [
+  'owner',
+  'founder',
+  'c_suite',
+  'partner',
+  'head',
+  'director',
+  'manager',
+];
+
 // Looks up people at organisations whose registered domain matches the
-// argument. The biased seniority filter pulls decision-makers first; we
-// cap per_page hard to bound the credit spend per prospect.
+// argument. Per_page caps the credit spend per prospect — Apollo charges
+// one credit per unlocked contact in the result set.
 export async function searchPeopleByDomain(args: {
   domain: string;
   perPage?: number;
 }): Promise<ApolloPerson[]> {
   const perPage = Math.min(Math.max(args.perPage ?? 2, 1), 10);
-  const data = await request<PeopleSearchResponse>('/v1/mixed_people/search', {
+  const data = await request<PeopleSearchResponse>(PEOPLE_SEARCH_PATH, {
     q_organization_domains_list: [args.domain],
     per_page: perPage,
     page: 1,
-    person_seniorities: ['owner', 'founder', 'c_suite', 'partner', 'head', 'director', 'manager'],
+    person_seniorities: DECISION_MAKER_SENIORITIES,
   });
   return data.people ?? [];
 }
@@ -91,11 +107,11 @@ export async function searchPeopleByOrganisationName(args: {
   perPage?: number;
 }): Promise<ApolloPerson[]> {
   const perPage = Math.min(Math.max(args.perPage ?? 2, 1), 10);
-  const data = await request<PeopleSearchResponse>('/v1/mixed_people/search', {
+  const data = await request<PeopleSearchResponse>(PEOPLE_SEARCH_PATH, {
     q_organization_name: args.name,
     per_page: perPage,
     page: 1,
-    person_seniorities: ['owner', 'founder', 'c_suite', 'partner', 'head', 'director', 'manager'],
+    person_seniorities: DECISION_MAKER_SENIORITIES,
   });
   return data.people ?? [];
 }

@@ -235,18 +235,18 @@ export function ProspectsReview({
         <div className="sm:col-span-3 flex flex-wrap items-end gap-2">
           <div>
             <label className="block text-[10px] font-medium uppercase tracking-wider text-neutral-500">
-              Apollo per prospect
+              Apollo people per company
             </label>
             <select
               value={apolloPerPage}
               onChange={(e) => setApolloPerPage(parseInt(e.target.value, 10) || 2)}
               className="mt-1 w-24 rounded-md border border-neutral-200 bg-white px-2 py-1.5 text-xs"
-              title="How many contacts to look up per company. Apollo charges 1 credit per contact returned."
+              title="Apollo charges 1 credit per unlocked email returned — not per person, not per query. Names + titles are free even when emails stay locked."
             >
-              <option value={1}>1 contact</option>
-              <option value={2}>2 contacts</option>
-              <option value={3}>3 contacts</option>
-              <option value={5}>5 contacts</option>
+              <option value={1}>1 each</option>
+              <option value={2}>2 each</option>
+              <option value={3}>3 each</option>
+              <option value={5}>5 each</option>
             </select>
           </div>
           <button
@@ -254,9 +254,9 @@ export function ProspectsReview({
             onClick={enrichWithApollo}
             disabled={busy || selected.size === 0}
             className="rounded-md border border-violet-300 bg-white px-3 py-1.5 text-xs font-medium text-violet-700 hover:bg-violet-50 disabled:opacity-50"
-            title={`~${selected.size * apolloPerPage} Apollo credits for ${selected.size} prospects`}
+            title={`Up to ${selected.size * apolloPerPage} credits — only unlocked emails count, names/titles are free`}
           >
-            Enrich with Apollo (~{selected.size * apolloPerPage} credits)
+            Enrich with Apollo (≤{selected.size * apolloPerPage} credits)
           </button>
           <button
             type="button"
