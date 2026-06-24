@@ -396,6 +396,12 @@ export async function scrapeWebsiteForEmailsAndAddress(
   websiteUrl: string,
 ): Promise<WebsiteEnrichment> {
   const empty: WebsiteEnrichment = { emails: [], address: { street: null, city: null, postcode: null } };
+  // Schools often have URLs like 'www.example.co.uk' without a scheme in
+  // the GIAS data. Without normalising, new URL() throws and we silently
+  // return empty — counting that as 'succeeded' and never actually fetching.
+  const normalised = normaliseWebsiteUrl(websiteUrl);
+  if (!normalised) return empty;
+  websiteUrl = normalised;
   try {
     new URL(websiteUrl);
   } catch {
@@ -416,37 +422,14 @@ export async function scrapeWebsiteForEmailsAndAddress(
   }
 
   // Pull candidate contact-page URLs out of the homepage's actual
-  // navigation. If the direct-fetched homepage had no contact-y links —
-  // typically because the nav was JS-rendered or behind a cookie banner —
-  // re-fetch via ScrapingBee (real Chromium) so we get the rendered nav.
-  // No hardcoded URL guessing: if the rendered nav still has no contact
-  // link, we accept the site doesn't have one rather than fire requests
-  // at /contact, /contact-us etc. that 404 most of the time.
+  // navigation. No hardcoded URL guessing, no ScrapingBee re-fetch: if
+  // the direct nav had no contact link we accept it. ScrapingBee still
+  // kicks in transparently at the fetch layer when direct fetch fails
+  // outright (TCP refused, blocked, etc.) — that's the only fallback.
   const seen = new Set<string>();
   let candidates: string[] = [];
   if (home) {
     candidates = findContactLinks(home, websiteUrl);
-  }
-  if (candidates.length === 0 && isScrapingBeeConfigured()) {
-    try {
-      const rendered = await fetchViaScrapingBee(websiteUrl, { renderJs: true });
-      if (rendered && rendered.length > 0) {
-        // Catch any emails the rendered version exposes that the direct
-        // fetch didn't (JS-rendered mailto links, async-injected
-        // contact blocks, etc.).
-        for (const e of extractEmailsFromHtml(rendered)) emails.add(e);
-        if (!address.postcode) {
-          const renderedAddr = extractAddressFromHtml(rendered);
-          if (renderedAddr.postcode) address = renderedAddr;
-        }
-        candidates = findContactLinks(rendered, websiteUrl);
-      }
-    } catch (err) {
-      console.warn(
-        `website-scrape ScrapingBee homepage re-fetch failed for ${websiteUrl}:`,
-        err instanceof Error ? err.message : err,
-      );
-    }
   }
 
   for (const url of candidates) {
@@ -470,9 +453,23 @@ export async function scrapeWebsiteForEmailsAndAddress(
 export function domainOf(url: string | null): string | null {
   if (!url) return null;
   try {
-    const u = new URL(url);
+    const u = new URL(normaliseWebsiteUrl(url) ?? url);
     return u.host.toLowerCase().replace(/^www\./, '');
   } catch {
     return null;
   }
+}
+
+// Schools' website URLs in the GIAS data are inconsistent — some have
+// `https://`, some are bare `www.school.uk`, occasionally with leading
+// slashes or stray whitespace. Prefix `https://` when no scheme is set
+// so both the UI link AND our scraper hit the real URL, not a relative
+// path or garbage.
+export function normaliseWebsiteUrl(url: string | null | undefined): string | null {
+  if (!url) return null;
+  const trimmed = url.trim();
+  if (!trimmed) return null;
+  if (/^https?:\/\//i.test(trimmed)) return trimmed;
+  const clean = trimmed.replace(/^\/+/, '');
+  return `https://${clean}`;
 }

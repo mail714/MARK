@@ -65,3 +65,53 @@ export async function fetchViaScrapingBee(
     clearTimeout(timer);
   }
 }
+
+// ScrapingBee's AI extraction endpoint. Takes a URL plus a JSON object of
+// extraction rules (one prompt per field) and returns the extracted values.
+// They handle JS rendering, contact-page navigation and email parsing on
+// their side. Costs more credits per call than a plain fetch (~25 with JS
+// rendering) but gets the email when our regex + nav cascade can't.
+export async function extractViaScrapingBeeAi<T extends Record<string, string>>(
+  url: string,
+  rules: T,
+  opts: ScrapingBeeFetchOptions = {},
+): Promise<Partial<Record<keyof T, string | null>>> {
+  const key = apiKey();
+  if (!key) throw new ScrapingBeeError('SCRAPINGBEE_API_KEY is not set', 0);
+
+  const params = new URLSearchParams({
+    api_key: key,
+    url,
+    render_js: String(opts.renderJs ?? true),
+    country_code: opts.countryCode ?? 'gb',
+    ai_extract_rules: JSON.stringify(rules),
+  });
+  if (opts.premiumProxy) params.set('premium_proxy', 'true');
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), opts.timeoutMs ?? 60_000);
+  try {
+    const res = await fetch(`${BASE_URL}?${params.toString()}`, {
+      signal: controller.signal,
+      cache: 'no-store',
+    });
+    if (!res.ok) {
+      const text = await res.text().catch(() => '');
+      throw new ScrapingBeeError(
+        `ScrapingBee AI extraction returned ${res.status}: ${text.slice(0, 200)}`,
+        res.status,
+      );
+    }
+    const body = await res.text();
+    try {
+      return JSON.parse(body) as Partial<Record<keyof T, string | null>>;
+    } catch {
+      throw new ScrapingBeeError(
+        `ScrapingBee AI extraction returned non-JSON body: ${body.slice(0, 200)}`,
+        200,
+      );
+    }
+  } finally {
+    clearTimeout(timer);
+  }
+}

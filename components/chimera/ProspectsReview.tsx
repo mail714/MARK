@@ -7,6 +7,7 @@ import type {
   ProspectAssignmentStatus,
   ProspectBrandAssignment,
 } from '@/lib/chimera/types';
+import { normaliseWebsiteUrl } from '@/lib/chimera/website-scrape';
 import { BulkJobProgress } from './BulkJobProgress';
 
 type Brand = { id: string; slug: string; name: string };
@@ -302,7 +303,7 @@ export function ProspectsReview({
                   <div className="text-xs font-medium text-neutral-800">{p.business_name}</div>
                   {p.website ? (
                     <a
-                      href={p.website}
+                      href={normaliseWebsiteUrl(p.website) ?? p.website}
                       target="_blank"
                       rel="noreferrer"
                       className="block max-w-xs truncate text-[10px] text-neutral-500 hover:underline"
