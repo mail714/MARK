@@ -13,6 +13,22 @@ type CheckResult = {
   normalisedUrl: string;
 };
 
+type FindResult = {
+  ok: boolean;
+  query: string;
+  candidate: {
+    name: string;
+    address: string | null;
+    phone: string | null;
+    website: string | null;
+    types: string[];
+    matchedPostcode: boolean;
+    matchedPhone: boolean;
+    confidence: 'high' | 'medium' | 'low';
+  } | null;
+  reason: string | null;
+};
+
 export function UpdateWebsiteButton({
   prospectId,
   currentUrl,
@@ -28,6 +44,7 @@ export function UpdateWebsiteButton({
   const [url, setUrl] = useState(currentUrl ?? '');
   const [busy, setBusy] = useState(false);
   const [check, setCheck] = useState<CheckResult | null>(null);
+  const [find, setFind] = useState<FindResult | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -41,6 +58,7 @@ export function UpdateWebsiteButton({
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setUrl(currentUrl ?? '');
     setCheck(null);
+    setFind(null);
     setError(null);
   }, [currentUrl, open]);
 
@@ -61,6 +79,30 @@ export function UpdateWebsiteButton({
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? `Check failed (${res.status})`);
       setCheck(data as CheckResult);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function autoFind() {
+    setBusy(true);
+    setError(null);
+    setFind(null);
+    setCheck(null);
+    try {
+      const res = await fetch(`/api/chimera/prospects/${prospectId}/find-website`, {
+        method: 'POST',
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? `Find failed (${res.status})`);
+      setFind(data as FindResult);
+      // Pre-fill the URL field if we found a website, so the operator can
+      // edit / verify / save without re-typing.
+      if (data.candidate?.website) {
+        setUrl(data.candidate.website);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -136,7 +178,16 @@ export function UpdateWebsiteButton({
             ) : null}
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={autoFind}
+              disabled={busy}
+              className="rounded-md border border-emerald-300 bg-white px-3 py-1.5 text-xs font-medium text-emerald-700 hover:bg-emerald-50 disabled:opacity-50"
+              title="Search Google Places by name + postcode and pre-fill the URL field with the best match"
+            >
+              {busy && !find && !check ? 'Searching…' : 'Auto-find via Google'}
+            </button>
             <button
               type="button"
               onClick={runCheck}
@@ -165,6 +216,56 @@ export function UpdateWebsiteButton({
               </span>
             ) : null}
           </div>
+
+          {find ? (
+            <div
+              className={`space-y-1 rounded-md border px-3 py-2 text-xs ${
+                find.candidate?.confidence === 'high'
+                  ? 'border-emerald-200 bg-emerald-50'
+                  : find.candidate?.confidence === 'medium'
+                    ? 'border-amber-200 bg-amber-50'
+                    : 'border-neutral-200 bg-neutral-50'
+              }`}
+            >
+              {find.candidate ? (
+                <>
+                  <div className="flex flex-wrap items-baseline gap-2">
+                    <span className="font-semibold">{find.candidate.name}</span>
+                    <span className="text-[10px] uppercase tracking-wider">
+                      {find.candidate.confidence} confidence
+                    </span>
+                  </div>
+                  {find.candidate.address ? (
+                    <div className="text-neutral-700">{find.candidate.address}</div>
+                  ) : null}
+                  <div className="flex flex-wrap gap-2 text-[10px] text-neutral-600">
+                    {find.candidate.matchedPhone ? (
+                      <span className="text-emerald-700">✓ phone matches</span>
+                    ) : null}
+                    {find.candidate.matchedPostcode ? (
+                      <span className="text-emerald-700">✓ postcode matches</span>
+                    ) : null}
+                    {!find.candidate.matchedPhone && !find.candidate.matchedPostcode ? (
+                      <span className="text-amber-700">⚠ neither phone nor postcode matched — double check</span>
+                    ) : null}
+                  </div>
+                  {find.candidate.website ? (
+                    <div className="text-[10px] break-all text-neutral-500">
+                      Google&apos;s website: {find.candidate.website}
+                    </div>
+                  ) : (
+                    <div className="text-[10px] text-neutral-500">
+                      Google has no website listed for this place.
+                    </div>
+                  )}
+                </>
+              ) : (
+                <div className="text-neutral-700">
+                  No match found — {find.reason ?? 'try editing the URL manually'}.
+                </div>
+              )}
+            </div>
+          ) : null}
 
           {error ? <div className="text-xs text-red-600">{error}</div> : null}
 
