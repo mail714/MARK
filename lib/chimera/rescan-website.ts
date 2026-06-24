@@ -1,99 +1,134 @@
 import { createAdminClient } from '@/lib/supabase/admin';
 import { scrapeWebsiteForEmailsAndAddress } from './website-scrape';
+import { createBulkJob, updateBulkJob, type BulkJob } from './bulk-jobs';
 
-export type RescanResult = {
-  prospectsTried: number;
-  prospectsUpdated: number;
-  emailsAdded: number;
-  postcodesConfirmed: number;
-  errors: Array<{ prospectId: string; reason: string }>;
-};
-
-// Re-runs the website scrape (emails + address cross-check) on every
-// supplied prospect that has a website. Adds any newly-found emails to the
-// existing emails array, deduped. Used by the 'Rescan websites' bulk
-// action — handy after improving the scraper, or just to refresh data on
-// a stale search.
-//
-// Concurrency capped at 4 — enough to feel responsive without hammering
-// any one school's web server.
-export async function rescanWebsitesForProspects(args: {
-  prospectIds: string[];
-}): Promise<RescanResult> {
-  const supabase = createAdminClient();
-  const { data: prospects, error } = await supabase
-    .from('prospects')
-    .select('id, business_name, website, emails, postcode')
-    .in('id', args.prospectIds);
-  if (error) throw new Error(`Failed to load prospects: ${error.message}`);
-
-  type Row = {
-    id: string;
-    business_name: string;
-    website: string | null;
-    emails: string[];
-    postcode: string | null;
-  };
-
-  const rows = ((prospects ?? []) as Row[]).filter((p) => !!p.website);
-
-  const result: RescanResult = {
-    prospectsTried: 0,
-    prospectsUpdated: 0,
-    emailsAdded: 0,
-    postcodesConfirmed: 0,
-    errors: [],
-  };
-
-  const CONCURRENCY = 4;
-  let cursor = 0;
-  const workers = Array.from({ length: Math.min(CONCURRENCY, rows.length) }, async () => {
-    for (;;) {
-      const idx = cursor++;
-      if (idx >= rows.length) return;
-      const p = rows[idx];
-      if (!p.website) continue;
-      result.prospectsTried += 1;
-      try {
-        const enrichment = await scrapeWebsiteForEmailsAndAddress(p.website);
-        const before = new Set(p.emails.map((e) => e.toLowerCase()));
-        const merged = [...p.emails];
-        let added = 0;
-        for (const e of enrichment.emails) {
-          if (!before.has(e)) {
-            merged.push(e);
-            before.add(e);
-            added += 1;
-          }
-        }
-        let postcodeConfirmed = false;
-        const patch: Record<string, unknown> = {};
-        if (added > 0) patch.emails = merged;
-        if (enrichment.address.postcode && p.postcode === enrichment.address.postcode) {
-          postcodeConfirmed = true;
-        }
-        if (Object.keys(patch).length > 0) {
-          const { error: updateErr } = await supabase
-            .from('prospects')
-            .update(patch)
-            .eq('id', p.id);
-          if (updateErr) {
-            result.errors.push({ prospectId: p.id, reason: updateErr.message });
-            continue;
-          }
-          result.prospectsUpdated += 1;
-        }
-        result.emailsAdded += added;
-        if (postcodeConfirmed) result.postcodesConfirmed += 1;
-      } catch (err) {
-        result.errors.push({
-          prospectId: p.id,
-          reason: err instanceof Error ? err.message : String(err),
-        });
-      }
-    }
+// Starts a rescan as a background job. Creates a bulk_jobs row in
+// 'running' state, kicks off the work via setImmediate (so the HTTP route
+// returns under a second), and gives the caller a job_id the UI can poll
+// for live progress.
+export async function startWebsiteRescan(prospectIds: string[]): Promise<string> {
+  const jobId = await createBulkJob({
+    kind: 'rescan-website',
+    total: prospectIds.length,
+    metadata: { prospect_ids: prospectIds },
   });
-  await Promise.all(workers);
+  setImmediate(() => {
+    runWebsiteRescan(jobId, prospectIds).catch((err) => {
+      console.error('rescan-website job failed', jobId, err);
+    });
+  });
+  return jobId;
+}
 
-  return result;
+async function runWebsiteRescan(jobId: string, prospectIds: string[]): Promise<void> {
+  const supabase = createAdminClient();
+  try {
+    const { data: prospects, error } = await supabase
+      .from('prospects')
+      .select('id, business_name, website, emails, postcode')
+      .in('id', prospectIds);
+    if (error) throw new Error(`Failed to load prospects: ${error.message}`);
+
+    type Row = {
+      id: string;
+      business_name: string;
+      website: string | null;
+      emails: string[];
+      postcode: string | null;
+    };
+    const rows = ((prospects ?? []) as Row[]).filter((p) => !!p.website);
+
+    let processed = 0;
+    let succeeded = 0;
+    let failed = 0;
+    let emailsAdded = 0;
+    const errors: BulkJob['errors'] = [];
+    let lastFlush = Date.now();
+
+    const flush = async () => {
+      await updateBulkJob(jobId, {
+        processed,
+        succeeded,
+        failed,
+        emails_added: emailsAdded,
+        errors: errors.slice(0, 20),
+        last_error: errors[0]?.reason ?? null,
+      });
+      lastFlush = Date.now();
+    };
+
+    const CONCURRENCY = 4;
+    let cursor = 0;
+    const workers = Array.from({ length: Math.min(CONCURRENCY, rows.length) }, async () => {
+      for (;;) {
+        const idx = cursor++;
+        if (idx >= rows.length) return;
+        const p = rows[idx];
+        if (!p.website) {
+          processed += 1;
+          continue;
+        }
+        try {
+          const enrichment = await scrapeWebsiteForEmailsAndAddress(p.website);
+          const before = new Set(p.emails.map((e) => e.toLowerCase()));
+          const merged = [...p.emails];
+          let added = 0;
+          for (const e of enrichment.emails) {
+            if (!before.has(e)) {
+              merged.push(e);
+              before.add(e);
+              added += 1;
+            }
+          }
+          if (added > 0) {
+            const { error: updateErr } = await supabase
+              .from('prospects')
+              .update({ emails: merged })
+              .eq('id', p.id);
+            if (updateErr) {
+              errors.push({ id: p.id, reason: updateErr.message });
+              failed += 1;
+            } else {
+              emailsAdded += added;
+              succeeded += 1;
+            }
+          } else {
+            succeeded += 1;
+          }
+        } catch (err) {
+          errors.push({
+            id: p.id,
+            reason: err instanceof Error ? err.message : String(err),
+          });
+          failed += 1;
+        }
+        processed += 1;
+
+        // Flush progress every couple of seconds so the poller sees live
+        // updates without us hammering the DB on every single prospect.
+        if (Date.now() - lastFlush > 1500) {
+          await flush();
+        }
+      }
+    });
+    await Promise.all(workers);
+    await flush();
+
+    await updateBulkJob(jobId, {
+      status: 'completed',
+      processed,
+      succeeded,
+      failed,
+      emails_added: emailsAdded,
+      errors: errors.slice(0, 20),
+      finished_at: new Date().toISOString(),
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    await updateBulkJob(jobId, {
+      status: 'failed',
+      last_error: message,
+      finished_at: new Date().toISOString(),
+    });
+  }
 }

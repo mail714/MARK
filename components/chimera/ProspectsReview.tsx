@@ -7,6 +7,7 @@ import type {
   ProspectAssignmentStatus,
   ProspectBrandAssignment,
 } from '@/lib/chimera/types';
+import { BulkJobProgress } from './BulkJobProgress';
 
 type Brand = { id: string; slug: string; name: string };
 type AddressBook = { dotdigital_id: number; name: string; contact_count: number | null };
@@ -30,6 +31,7 @@ export function ProspectsReview({
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [apolloPerPage, setApolloPerPage] = useState(2);
+  const [currentJobId, setCurrentJobId] = useState<string | null>(null);
   const [pushBookId, setPushBookId] = useState<number | null>(addressBooks[0]?.dotdigital_id ?? null);
   const [filter, setFilter] = useState<'all' | 'with-email' | 'no-email'>('all');
 
@@ -100,18 +102,18 @@ export function ProspectsReview({
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error ?? `Rescan failed (${res.status})`);
-      const errCount = Array.isArray(data.errors) ? data.errors.length : 0;
-      const firstError = (data.errors as Array<{ reason: string }> | undefined)?.[0]?.reason;
-      setMessage(
-        `Website rescan: tried ${data.prospectsTried} · ${data.emailsAdded} new emails · ${data.prospectsUpdated} prospects updated${errCount > 0 ? ` · ${errCount} errors` : ''}.`,
-      );
-      if (errCount > 0 && firstError) {
-        setError(`First error: ${firstError}`);
+      // Background job — flip the UI into 'show progress' mode and the
+      // BulkJobProgress card takes over from here, polling status.
+      if (data.job_id) {
+        // Keep `busy` true — the BulkJobProgress card handles its own flip
+        // back to idle via onDone, which the parent listens to below.
+        setCurrentJobId(data.job_id as string);
+      } else {
+        setMessage('Rescan started.');
+        setBusy(false);
       }
-      router.refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
-    } finally {
       setBusy(false);
     }
   }
@@ -318,6 +320,19 @@ export function ProspectsReview({
           {message ? <div className="text-xs text-emerald-700">{message}</div> : null}
         </div>
       </div>
+
+      {currentJobId ? (
+        <BulkJobProgress
+          jobId={currentJobId}
+          onDone={(job) => {
+            setBusy(false);
+            setCurrentJobId(null);
+            setMessage(
+              `${job.kind === 'rescan-website' ? 'Website rescan' : job.kind === 'apollo-enrich' ? 'Apollo enrich' : 'dotdigital push'} ${job.status} — ${job.succeeded} succeeded${job.emails_added ? `, +${job.emails_added} emails` : ''}${job.contacts_added ? `, +${job.contacts_added} contacts` : ''}${job.failed ? `, ${job.failed} failed` : ''}.`,
+            );
+          }}
+        />
+      ) : null}
 
       <div className="overflow-hidden rounded-lg border border-neutral-200 bg-white">
         <table className="w-full text-sm">

@@ -1,9 +1,11 @@
 import { NextResponse } from 'next/server';
-import { rescanWebsitesForProspects } from '@/lib/chimera/rescan-website';
+import { startWebsiteRescan } from '@/lib/chimera/rescan-website';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
-export const maxDuration = 300;
+// Returns the job id in <1s; the work runs in the background via
+// setImmediate and persists progress to bulk_jobs for the UI poller.
+export const maxDuration = 30;
 
 export async function POST(req: Request) {
   let body: Record<string, unknown>;
@@ -17,8 +19,8 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: 'prospect_ids[] is required' }, { status: 400 });
   }
   try {
-    const result = await rescanWebsitesForProspects({ prospectIds: ids });
-    return NextResponse.json({ ok: true, ...result });
+    const jobId = await startWebsiteRescan(ids);
+    return NextResponse.json({ ok: true, job_id: jobId });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     return NextResponse.json({ error: message }, { status: 500 });
