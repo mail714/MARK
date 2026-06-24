@@ -26,6 +26,12 @@ const LIVE_MODULES: ModuleCard[] = [
       'Fan a case study or email out into one draft post per platform (Instagram, Facebook, TikTok, LinkedIn). Edit, schedule, publish.',
   },
   {
+    href: '/chimera',
+    title: 'Chimera Prospecting',
+    description:
+      'Discover new prospects via Google Maps + website scrape, or import a CSV. Review, dedupe, assign to a brand, push to dotdigital.',
+  },
+  {
     href: '/calendar',
     title: 'Marketing Calendar',
     description:
@@ -34,9 +40,9 @@ const LIVE_MODULES: ModuleCard[] = [
 ];
 
 const COMING_LATER = [
-  { title: 'Chimera Ingest', description: 'Prospect scraping → dotdigital address book sync.' },
   { title: 'Landing Pages', description: 'Wix Studio dynamic CMS pages bound to email campaigns.' },
   { title: 'Social Scheduling', description: 'Push approved social drafts to Buffer / Metricool.' },
+  { title: 'GA4 attribution', description: 'Post-click sessions and conversions per email, per link.' },
   { title: 'Marketing Planner', description: 'Sector-aware content calendar feeding everything else.' },
 ];
 

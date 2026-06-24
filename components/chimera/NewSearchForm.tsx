@@ -1,0 +1,164 @@
+'use client';
+
+import { useRouter } from 'next/navigation';
+import { useState } from 'react';
+import { PLACE_CATEGORIES } from './place-categories';
+
+export function NewSearchForm() {
+  const router = useRouter();
+  const [location, setLocation] = useState('');
+  const [categoryKey, setCategoryKey] = useState<string>('restaurant');
+  const [customCategory, setCustomCategory] = useState('');
+  const [radius, setRadius] = useState(1500);
+  const [overlap, setOverlap] = useState(40);
+  const [maxResults, setMaxResults] = useState(500);
+  const [applyChainFilter, setApplyChainFilter] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const isCustom = categoryKey === 'custom';
+  const category = isCustom ? customCategory.trim() : categoryKey;
+  const categoryLabel = isCustom
+    ? customCategory.trim()
+    : PLACE_CATEGORIES.find((c) => c.key === categoryKey)?.label ?? categoryKey;
+
+  async function submit() {
+    if (!location.trim() || !category) {
+      setError('Location and category are required.');
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await fetch('/api/chimera/searches', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          location: location.trim(),
+          category,
+          category_label: categoryLabel,
+          grid_radius_m: radius,
+          grid_overlap_pct: overlap,
+          max_results: maxResults,
+          apply_chain_filter: applyChainFilter,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error ?? `Start failed (${res.status})`);
+      router.push(`/chimera/searches/${data.id}`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="space-y-4 rounded-lg border border-neutral-200 bg-white p-5">
+      <Field label="Location">
+        <input
+          type="text"
+          value={location}
+          onChange={(e) => setLocation(e.target.value)}
+          placeholder="e.g. Bristol, Manchester, Nailsea"
+          className="w-full rounded-md border border-neutral-200 bg-white px-3 py-2 text-sm shadow-sm focus:border-neutral-500 focus:outline-none"
+        />
+      </Field>
+
+      <Field label="Category">
+        <select
+          value={categoryKey}
+          onChange={(e) => setCategoryKey(e.target.value)}
+          className="w-full rounded-md border border-neutral-200 bg-white px-3 py-2 text-sm shadow-sm focus:border-neutral-500 focus:outline-none"
+        >
+          {PLACE_CATEGORIES.map((c) => (
+            <option key={c.key} value={c.key}>{c.label}</option>
+          ))}
+          <option value="custom">Custom (free-text keyword)</option>
+        </select>
+      </Field>
+
+      {isCustom ? (
+        <Field label="Custom keyword">
+          <input
+            type="text"
+            value={customCategory}
+            onChange={(e) => setCustomCategory(e.target.value)}
+            placeholder="e.g. plumber, florist, solicitor"
+            className="w-full rounded-md border border-neutral-200 bg-white px-3 py-2 text-sm shadow-sm focus:border-neutral-500 focus:outline-none"
+          />
+        </Field>
+      ) : null}
+
+      <div className="grid gap-3 sm:grid-cols-3">
+        <Field label="Grid radius (m)">
+          <input
+            type="number"
+            min={500}
+            max={20000}
+            step={100}
+            value={radius}
+            onChange={(e) => setRadius(parseInt(e.target.value, 10) || 1500)}
+            className="w-full rounded-md border border-neutral-200 bg-white px-3 py-2 text-sm shadow-sm focus:border-neutral-500 focus:outline-none"
+          />
+          <p className="mt-0.5 text-[10px] text-neutral-500">Smaller = more cells, more coverage, more API calls.</p>
+        </Field>
+        <Field label="Overlap %">
+          <input
+            type="number"
+            min={0}
+            max={80}
+            step={5}
+            value={overlap}
+            onChange={(e) => setOverlap(parseInt(e.target.value, 10) || 40)}
+            className="w-full rounded-md border border-neutral-200 bg-white px-3 py-2 text-sm shadow-sm focus:border-neutral-500 focus:outline-none"
+          />
+          <p className="mt-0.5 text-[10px] text-neutral-500">40% avoids gaps at edges.</p>
+        </Field>
+        <Field label="Max results">
+          <input
+            type="number"
+            min={10}
+            max={5000}
+            step={10}
+            value={maxResults}
+            onChange={(e) => setMaxResults(parseInt(e.target.value, 10) || 500)}
+            className="w-full rounded-md border border-neutral-200 bg-white px-3 py-2 text-sm shadow-sm focus:border-neutral-500 focus:outline-none"
+          />
+          <p className="mt-0.5 text-[10px] text-neutral-500">Hard cap on grid scan.</p>
+        </Field>
+      </div>
+
+      <label className="flex items-center gap-2 text-xs text-neutral-700">
+        <input
+          type="checkbox"
+          checked={applyChainFilter}
+          onChange={(e) => setApplyChainFilter(e.target.checked)}
+        />
+        Skip large chains (restaurants, pubs, hotels). Turn off for schools / clubs.
+      </label>
+
+      <div className="flex items-center justify-between gap-3 border-t border-neutral-200 pt-3">
+        {error ? <div className="text-xs text-red-600">{error}</div> : <div />}
+        <button
+          type="button"
+          onClick={submit}
+          disabled={busy}
+          className="rounded-md bg-neutral-900 px-3 py-1.5 text-xs font-medium text-white hover:bg-neutral-700 disabled:opacity-50"
+        >
+          {busy ? 'Starting…' : 'Start search'}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function Field({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div>
+      <label className="block text-xs font-medium uppercase tracking-wider text-neutral-500">
+        {label}
+      </label>
+      <div className="mt-1">{children}</div>
+    </div>
+  );
+}
