@@ -140,6 +140,37 @@ export function extractEmailsFromHtml(html: string): Set<string> {
   for (const e of findObfuscatedEmails(text)) {
     if (isValidEmail(e) && /.+@.+\..+/.test(e)) out.add(e);
   }
+  // 4. JSON-LD structured data blocks. Schools commonly publish an
+  // EducationalOrganization record with an 'email' field; stripTags
+  // discards <script> bodies so the plain-text pass would miss it.
+  for (const m of html.matchAll(JSON_LD_RE)) {
+    try {
+      const parsed = JSON.parse(m[1].trim()) as unknown;
+      const items = Array.isArray(parsed) ? parsed : [parsed];
+      const expanded: Record<string, unknown>[] = [];
+      for (const it of items) {
+        if (it && typeof it === 'object') {
+          expanded.push(it as Record<string, unknown>);
+          const graph = (it as { '@graph'?: unknown[] })['@graph'];
+          if (Array.isArray(graph)) {
+            for (const g of graph) {
+              if (g && typeof g === 'object') expanded.push(g as Record<string, unknown>);
+            }
+          }
+        }
+      }
+      for (const it of expanded) {
+        const email = it.email;
+        if (typeof email === 'string') {
+          const e = email.replace(/^mailto:/i, '').trim().toLowerCase();
+          EMAIL_RE.lastIndex = 0;
+          if (EMAIL_RE.test(e) && isValidEmail(e)) out.add(e);
+        }
+      }
+    } catch {
+      // skip malformed JSON-LD block
+    }
+  }
   return out;
 }
 
@@ -204,6 +235,7 @@ export type FetchSource = 'direct' | 'scrapingbee' | 'failed';
 
 export type FetchPageResult = {
   html: string | null;
+  finalUrl: string | null;
   source: FetchSource;
   directError: string | null;
   scrapingBeeError: string | null;
@@ -217,6 +249,7 @@ export type FetchPageResult = {
 export async function fetchPageWithSource(url: string): Promise<FetchPageResult> {
   const result: FetchPageResult = {
     html: null,
+    finalUrl: null,
     source: 'failed',
     directError: null,
     scrapingBeeError: null,
@@ -236,6 +269,7 @@ export async function fetchPageWithSource(url: string): Promise<FetchPageResult>
       const text = await res.text();
       if (text.length > 0) {
         result.html = text;
+        result.finalUrl = res.url || url;
         result.source = 'direct';
         return result;
       }
@@ -264,6 +298,10 @@ export async function fetchPageWithSource(url: string): Promise<FetchPageResult>
       const html = await fetchViaScrapingBee(url, { renderJs: true });
       if (html && html.length > 0) {
         result.html = html;
+        // ScrapingBee doesn't return the final URL post-redirect, so we
+        // use the original — good enough since most school redirects
+        // resolve at the direct-fetch layer.
+        result.finalUrl = url;
         result.source = 'scrapingbee';
         return result;
       }
@@ -411,8 +449,14 @@ export async function scrapeWebsiteForEmailsAndAddress(
   let emails = new Set<string>();
   let address: AddressExtract = { street: null, city: null, postcode: null };
 
-  // Homepage first
-  const home = await fetchPage(websiteUrl);
+  // Homepage first — fetched through the source-tracking variant so we
+  // know the final URL after any 301/302 redirects (e.g. tworiversschool
+  // .org.uk → futuralearning.co.uk/schools/two-rivers/). Without the
+  // redirected URL, findContactLinks would filter out same-page contact
+  // links as 'different origin'.
+  const homeResult = await fetchPageWithSource(websiteUrl);
+  const home = homeResult.html;
+  const effectiveUrl = homeResult.finalUrl ?? websiteUrl;
   if (home) {
     emails = extractEmailsFromHtml(home);
     address = extractAddressFromHtml(home);
@@ -429,7 +473,7 @@ export async function scrapeWebsiteForEmailsAndAddress(
   const seen = new Set<string>();
   let candidates: string[] = [];
   if (home) {
-    candidates = findContactLinks(home, websiteUrl);
+    candidates = findContactLinks(home, effectiveUrl);
   }
 
   for (const url of candidates) {

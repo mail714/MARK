@@ -16,6 +16,16 @@ export function SearchProgress({ initial }: { initial: ChimeraSearch }) {
   const [search, setSearch] = useState<ChimeraSearch>(initial);
   const isLive = search.status === 'pending' || search.status === 'running';
 
+  // Sync state to the latest server-rendered prop whenever the parent
+  // refreshes — e.g. after a Rescan websites job updates the cached
+  // prospects_with_email counter and router.refresh() re-renders the
+  // page. Without this, the WITH EMAIL / WITH WEBSITE tiles keep
+  // showing the original-search snapshot.
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setSearch(initial);
+  }, [initial]);
+
   useEffect(() => {
     if (!isLive) return;
     let cancelled = false;

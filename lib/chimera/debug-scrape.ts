@@ -9,6 +9,7 @@ import { fetchViaScrapingBee, isScrapingBeeConfigured } from '@/lib/scrapingbee/
 
 export type DebugFetchResult = {
   url: string;
+  finalUrl: string | null;
   source: FetchSource;
   htmlBytes: number | null;
   htmlSnippet: string;
@@ -34,6 +35,7 @@ export type DebugScrapeResult = {
 async function fetchDebug(url: string, expected: string | null): Promise<DebugFetchResult> {
   const result: DebugFetchResult = {
     url,
+    finalUrl: null,
     source: 'failed',
     htmlBytes: null,
     htmlSnippet: '',
@@ -48,6 +50,7 @@ async function fetchDebug(url: string, expected: string | null): Promise<DebugFe
   // production uses — direct first, ScrapingBee fallback on failure.
   const fetched = await fetchPageWithSource(url);
   result.source = fetched.source;
+  result.finalUrl = fetched.finalUrl;
   result.directError = fetched.directError;
   result.scrapingBeeError = fetched.scrapingBeeError;
   if (fetched.html) {
