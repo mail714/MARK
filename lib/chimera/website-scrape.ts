@@ -33,7 +33,10 @@ const IGNORE_EMAIL = [
   '.gif', '.svg', 'noreply', 'no-reply', 'google.com', 'goo.gl', 'maps.google',
 ];
 
-const CONTACT_PATHS = ['/contact', '/contact-us', '/about', '/find-us'];
+// Hardcoded contact paths used to be tried as a fallback when nav-parsing
+// found no contact links. That fallback was removed in favour of a
+// ScrapingBee homepage re-fetch — guessing /contact, /contact-us etc.
+// burns requests and credits on URLs that 404 more often than not.
 
 const HEADERS = {
   'User-Agent':
@@ -393,9 +396,8 @@ export async function scrapeWebsiteForEmailsAndAddress(
   websiteUrl: string,
 ): Promise<WebsiteEnrichment> {
   const empty: WebsiteEnrichment = { emails: [], address: { street: null, city: null, postcode: null } };
-  let origin: string;
   try {
-    origin = new URL(websiteUrl).origin;
+    new URL(websiteUrl);
   } catch {
     return empty;
   }
@@ -414,16 +416,37 @@ export async function scrapeWebsiteForEmailsAndAddress(
   }
 
   // Pull candidate contact-page URLs out of the homepage's actual
-  // navigation rather than guessing from a hardcoded list. Falls back to
-  // the hardcoded list if there's no homepage HTML to parse or no
-  // contact-y links were found in it.
+  // navigation. If the direct-fetched homepage had no contact-y links —
+  // typically because the nav was JS-rendered or behind a cookie banner —
+  // re-fetch via ScrapingBee (real Chromium) so we get the rendered nav.
+  // No hardcoded URL guessing: if the rendered nav still has no contact
+  // link, we accept the site doesn't have one rather than fire requests
+  // at /contact, /contact-us etc. that 404 most of the time.
   const seen = new Set<string>();
   let candidates: string[] = [];
   if (home) {
     candidates = findContactLinks(home, websiteUrl);
   }
-  if (candidates.length === 0) {
-    candidates = CONTACT_PATHS.map((p) => `${origin}${p}`);
+  if (candidates.length === 0 && isScrapingBeeConfigured()) {
+    try {
+      const rendered = await fetchViaScrapingBee(websiteUrl, { renderJs: true });
+      if (rendered && rendered.length > 0) {
+        // Catch any emails the rendered version exposes that the direct
+        // fetch didn't (JS-rendered mailto links, async-injected
+        // contact blocks, etc.).
+        for (const e of extractEmailsFromHtml(rendered)) emails.add(e);
+        if (!address.postcode) {
+          const renderedAddr = extractAddressFromHtml(rendered);
+          if (renderedAddr.postcode) address = renderedAddr;
+        }
+        candidates = findContactLinks(rendered, websiteUrl);
+      }
+    } catch (err) {
+      console.warn(
+        `website-scrape ScrapingBee homepage re-fetch failed for ${websiteUrl}:`,
+        err instanceof Error ? err.message : err,
+      );
+    }
   }
 
   for (const url of candidates) {

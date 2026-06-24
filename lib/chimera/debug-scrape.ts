@@ -5,7 +5,7 @@ import {
   findContactLinks,
   type FetchSource,
 } from './website-scrape';
-import { isScrapingBeeConfigured } from '@/lib/scrapingbee/client';
+import { fetchViaScrapingBee, isScrapingBeeConfigured } from '@/lib/scrapingbee/client';
 
 export type DebugFetchResult = {
   url: string;
@@ -100,24 +100,33 @@ export async function debugScrape(args: {
   const allEmails = new Set(result.homepage.emailsFound);
   let postcode = result.homepage.postcodeFound;
 
-  // Parse nav for contact links. The homepage HTML is already in
-  // result.homepage but we don't keep the full body, just the snippet —
-  // re-fetch via the shared fetcher so the candidates come from whichever
-  // path actually succeeded.
+  // Parse nav for contact links from the homepage HTML. The fetchDebug
+  // run above keeps only a snippet, so re-fetch through the shared
+  // fetcher to get the full body. If that returned no contact-y links —
+  // typically because the nav is JS-rendered or behind a cookie banner —
+  // try ScrapingBee directly to get a rendered version. No hardcoded
+  // /contact / /contact-us fallback: if the rendered nav still has no
+  // contact link, that's an honest signal.
   if (result.homepage.htmlBytes && result.homepage.htmlBytes > 0) {
     const re = await fetchPageWithSource(args.websiteUrl);
     if (re.html) {
       result.contactCandidates = findContactLinks(re.html, args.websiteUrl);
     }
   }
-  if (result.contactCandidates.length === 0) {
+  if (result.contactCandidates.length === 0 && isScrapingBeeConfigured()) {
     try {
-      const origin = new URL(args.websiteUrl).origin;
-      result.contactCandidates = ['/contact', '/contact-us', '/about', '/find-us'].map(
-        (p) => `${origin}${p}`,
-      );
+      const rendered = await fetchViaScrapingBee(args.websiteUrl, { renderJs: true });
+      if (rendered && rendered.length > 0) {
+        // Pick up any newly-visible emails from the rendered version too.
+        for (const e of extractEmailsFromHtml(rendered)) allEmails.add(e);
+        if (!postcode) {
+          const a = extractAddressFromHtml(rendered);
+          if (a.postcode) postcode = a.postcode;
+        }
+        result.contactCandidates = findContactLinks(rendered, args.websiteUrl);
+      }
     } catch {
-      // unparseable URL — leave candidates empty
+      // ScrapingBee failed — leave candidates empty
     }
   }
 
