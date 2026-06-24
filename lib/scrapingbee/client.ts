@@ -47,7 +47,8 @@ export async function fetchViaScrapingBee(
   if (opts.premiumProxy) params.set('premium_proxy', 'true');
 
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), opts.timeoutMs ?? 45_000);
+  const timeoutMs = opts.timeoutMs ?? 120_000;
+  const timer = setTimeout(() => controller.abort('client-side timeout'), timeoutMs);
   try {
     const res = await fetch(`${BASE_URL}?${params.toString()}`, {
       signal: controller.signal,
@@ -61,6 +62,14 @@ export async function fetchViaScrapingBee(
       );
     }
     return await res.text();
+  } catch (err) {
+    if (err instanceof Error && err.name === 'AbortError') {
+      throw new ScrapingBeeError(
+        `ScrapingBee request timed out after ${Math.round(timeoutMs / 1000)}s — school sites with heavy JS + cookie banners can be slow to render.`,
+        408,
+      );
+    }
+    throw err;
   } finally {
     clearTimeout(timer);
   }
