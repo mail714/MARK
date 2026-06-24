@@ -9,7 +9,12 @@ type Status = {
   lastSyncAt: string | null;
   lastSyncStatus: 'running' | 'completed' | 'failed' | null;
   lastError: string | null;
+  lastSourceUrl: string | null;
+  recordsImported: number;
 };
+
+const GIAS_URL_PATTERN =
+  'https://ea-edubase-api-prod.azurewebsites.net/edubase/downloads/public/edubasealldata{YYYYMMDD}.csv';
 
 function fmtDate(iso: string | null): string {
   if (!iso) return 'never';
@@ -28,11 +33,12 @@ export function SchoolsSyncCard({ initial }: { initial: Status }) {
   const [busy, setBusy] = useState(initial.lastSyncStatus === 'running');
   const [csvText, setCsvText] = useState('');
   const [showManual, setShowManual] = useState(false);
+  const [showUrlOverride, setShowUrlOverride] = useState(false);
+  const [urlOverride, setUrlOverride] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const lastTotal = useRef<number>(initial.totalSchools);
 
-  // Poll status while a sync is running so the UI reflects progress live.
   useEffect(() => {
     if (status.lastSyncStatus !== 'running') return;
     let cancelled = false;
@@ -68,21 +74,23 @@ export function SchoolsSyncCard({ initial }: { initial: Status }) {
     };
   }, [status.lastSyncStatus, router]);
 
-  async function kickOff(csv?: string) {
+  async function kickOff(opts: { csv?: string; sourceUrl?: string } = {}) {
     setBusy(true);
     setError(null);
     setMessage(null);
     lastTotal.current = status.totalSchools;
     try {
+      const body: Record<string, string> = {};
+      if (opts.csv) body.csv = opts.csv;
+      if (opts.sourceUrl) body.source_url = opts.sourceUrl;
       const res = await fetch('/api/chimera/sources/schools/sync', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: csv ? JSON.stringify({ csv }) : undefined,
+        body: Object.keys(body).length > 0 ? JSON.stringify(body) : undefined,
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error ?? `Sync failed (${res.status})`);
-      // Flip the local status into 'running' so the poller takes over.
-      setStatus((s) => ({ ...s, lastSyncStatus: 'running', lastError: null }));
+      setStatus((s) => ({ ...s, lastSyncStatus: 'running', lastError: null, recordsImported: 0 }));
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
       setBusy(false);
@@ -124,7 +132,11 @@ export function SchoolsSyncCard({ initial }: { initial: Status }) {
 
       {busy ? (
         <div className="mt-3 rounded-md bg-blue-50 px-3 py-2 text-xs text-blue-800">
-          Sync running in the background — page can be left and the status will update when complete.
+          Sync running in the background.{' '}
+          {status.recordsImported > 0
+            ? `${status.recordsImported.toLocaleString('en-GB')} rows imported so far.`
+            : 'Starting…'}{' '}
+          Safe to leave the page — status updates when complete.
         </div>
       ) : null}
       {status.lastSyncStatus === 'failed' && status.lastError && !busy ? (
@@ -134,6 +146,82 @@ export function SchoolsSyncCard({ initial }: { initial: Status }) {
       ) : null}
       {error ? <div className="mt-3 text-xs text-red-600">{error}</div> : null}
       {message ? <div className="mt-3 text-xs text-emerald-700">{message}</div> : null}
+
+      <div className="mt-4 border-t border-neutral-100 pt-3 text-xs">
+        <div className="space-y-1 text-neutral-600">
+          <div>
+            <span className="text-[10px] font-medium uppercase tracking-wider text-neutral-500">
+              URL pattern:
+            </span>{' '}
+            <code className="rounded bg-neutral-100 px-1.5 py-0.5 text-[10px] break-all">
+              {GIAS_URL_PATTERN}
+            </code>
+          </div>
+          <div className="text-[10px] text-neutral-500">
+            Auto-fetch walks back up to 7 days from today, then falls back to scraping{' '}
+            <a
+              href="https://get-information-schools.service.gov.uk/Downloads"
+              target="_blank"
+              rel="noreferrer"
+              className="underline"
+            >
+              the downloads page
+            </a>{' '}
+            for the current link.
+          </div>
+          {status.lastSourceUrl ? (
+            <div className="text-[10px] text-neutral-500">
+              <span className="font-medium uppercase tracking-wider">Last source:</span>{' '}
+              {status.lastSourceUrl === 'manual-upload' ? (
+                <span className="italic">manual upload</span>
+              ) : (
+                <a
+                  href={status.lastSourceUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="break-all underline"
+                >
+                  {status.lastSourceUrl}
+                </a>
+              )}
+            </div>
+          ) : null}
+        </div>
+      </div>
+
+      <div className="mt-4 border-t border-neutral-100 pt-3">
+        <button
+          type="button"
+          onClick={() => setShowUrlOverride(!showUrlOverride)}
+          className="text-xs text-neutral-500 hover:text-neutral-700"
+        >
+          {showUrlOverride ? '↑ Hide' : '↓ Show'} custom source URL (if gov.uk changes the URL pattern)
+        </button>
+        {showUrlOverride ? (
+          <div className="mt-2 space-y-2">
+            <p className="text-[10px] text-neutral-500">
+              If gov.uk changes their URL pattern and the auto-fetch breaks, paste a direct CSV URL
+              here. MARK fetches it and validates the response looks like a GIAS export before
+              importing.
+            </p>
+            <input
+              type="url"
+              value={urlOverride}
+              onChange={(e) => setUrlOverride(e.target.value)}
+              placeholder="https://…/edubasealldata20260624.csv"
+              className="w-full rounded-md border border-neutral-200 bg-white px-3 py-2 font-mono text-xs shadow-sm focus:border-neutral-500 focus:outline-none"
+            />
+            <button
+              type="button"
+              onClick={() => kickOff({ sourceUrl: urlOverride.trim() })}
+              disabled={busy || !urlOverride.trim()}
+              className="rounded-md border border-neutral-300 bg-white px-3 py-1.5 text-xs font-medium text-neutral-700 hover:bg-neutral-50 disabled:opacity-50"
+            >
+              {busy ? 'Fetching…' : 'Sync from this URL'}
+            </button>
+          </div>
+        ) : null}
+      </div>
 
       <div className="mt-4 border-t border-neutral-100 pt-3">
         <button
@@ -146,7 +234,7 @@ export function SchoolsSyncCard({ initial }: { initial: Status }) {
         {showManual ? (
           <div className="mt-2 space-y-2">
             <p className="text-[10px] text-neutral-500">
-              If the auto-fetch can&apos;t reach gov.uk (rare), download the &quot;Establishment
+              If neither the auto-fetch nor a custom URL works, download the &quot;Establishment
               fields&quot; CSV manually from{' '}
               <a
                 href="https://get-information-schools.service.gov.uk/Downloads"
@@ -166,7 +254,7 @@ export function SchoolsSyncCard({ initial }: { initial: Status }) {
             />
             <button
               type="button"
-              onClick={() => kickOff(csvText)}
+              onClick={() => kickOff({ csv: csvText })}
               disabled={busy || !csvText}
               className="rounded-md border border-neutral-300 bg-white px-3 py-1.5 text-xs font-medium text-neutral-700 hover:bg-neutral-50 disabled:opacity-50"
             >

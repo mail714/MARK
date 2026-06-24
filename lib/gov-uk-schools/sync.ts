@@ -1,5 +1,10 @@
 import { createAdminClient } from '@/lib/supabase/admin';
-import { fetchGiasCsv, parseGiasCsv, type GiasRow } from './client';
+import {
+  resolveGiasResponse,
+  streamGiasRowsFromResponse,
+  streamGiasRowsFromString,
+  type GiasRow,
+} from './client';
 
 export type SchoolsSyncSummary = {
   syncId: string;
@@ -7,105 +12,30 @@ export type SchoolsSyncSummary = {
   sourceUrl: string;
 };
 
-// Downloads + parses + upserts the whole GIAS register. Upserts in chunks
-// of 2000 with 4-way parallelism so a 25k-row register completes in seconds
-// rather than minutes. A sync row in schools_register_syncs tracks status
-// for the admin UI poller.
-export async function runGiasSync(csvOverride?: string): Promise<SchoolsSyncSummary> {
-  const supabase = createAdminClient();
-  const { data: syncRow, error: syncErr } = await supabase
-    .from('schools_register_syncs')
-    .insert({ status: 'running' })
-    .select('id')
-    .single();
-  if (syncErr) throw new Error(`Failed to start sync: ${syncErr.message}`);
-  const syncId = syncRow.id as string;
-
-  try {
-    let csv: string;
-    let sourceUrl = 'manual-upload';
-    if (csvOverride) {
-      csv = csvOverride;
-    } else {
-      const fetched = await fetchGiasCsv();
-      csv = fetched.csv;
-      sourceUrl = fetched.sourceUrl;
-    }
-
-    const rows = parseGiasCsv(csv);
-    if (rows.length === 0) {
-      throw new Error('Parsed CSV had zero rows — check the file format');
-    }
-
-    const now = new Date().toISOString();
-    const CHUNK = 2000;
-    const CONCURRENCY = 4;
-    const chunks: GiasRow[][] = [];
-    for (let i = 0; i < rows.length; i += CHUNK) {
-      chunks.push(rows.slice(i, i + CHUNK));
-    }
-
-    let nextChunk = 0;
-    let totalUpserted = 0;
-    const workers = Array.from({ length: Math.min(CONCURRENCY, chunks.length) }, async () => {
-      for (;;) {
-        const idx = nextChunk++;
-        if (idx >= chunks.length) return;
-        const chunk = chunks[idx].map((r) => ({ ...r, last_synced_at: now }));
-        const { error } = await supabase
-          .from('schools_register')
-          .upsert(chunk as unknown as Record<string, unknown>[], { onConflict: 'urn' });
-        if (error) throw new Error(`Upsert chunk ${idx} failed: ${error.message}`);
-        totalUpserted += chunk.length;
-        // Surface progress on each chunk so the UI poller has something to show.
-        await supabase
-          .from('schools_register_syncs')
-          .update({ records_imported: totalUpserted })
-          .eq('id', syncId);
-      }
-    });
-    await Promise.all(workers);
-
-    await supabase
-      .from('schools_register_syncs')
-      .update({
-        status: 'completed',
-        records_imported: totalUpserted,
-        source_url: sourceUrl,
-        finished_at: new Date().toISOString(),
-      })
-      .eq('id', syncId);
-
-    return { syncId, records: totalUpserted, sourceUrl };
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    await supabase
-      .from('schools_register_syncs')
-      .update({
-        status: 'failed',
-        last_error: message,
-        finished_at: new Date().toISOString(),
-      })
-      .eq('id', syncId);
-    throw err;
-  }
-}
+export type SyncKickoffOptions = {
+  csvOverride?: string;
+  sourceUrlOverride?: string;
+};
 
 // Creates the sync row in 'running' state and returns the ID immediately.
-// Used by the API route to kick off work via setImmediate and poll status
-// from the UI — avoids Render's proxy timing out long syncs.
-export async function startGiasSyncAsync(csvOverride?: string): Promise<string> {
+// The actual work runs via setImmediate after the response is sent, so the
+// HTTP route can return in <1s and dodge Render's proxy timeout. UI polls
+// /status for progress.
+export async function startGiasSyncAsync(opts: SyncKickoffOptions = {}): Promise<string> {
   const supabase = createAdminClient();
   const { data: syncRow, error: syncErr } = await supabase
     .from('schools_register_syncs')
-    .insert({ status: 'running' })
+    .insert({
+      status: 'running',
+      source_url: opts.sourceUrlOverride ?? null,
+    })
     .select('id')
     .single();
   if (syncErr) throw new Error(`Failed to start sync: ${syncErr.message}`);
   const syncId = syncRow.id as string;
 
   setImmediate(() => {
-    runGiasSyncBody(syncId, csvOverride).catch((err) => {
+    runGiasSyncBody(syncId, opts).catch((err) => {
       console.error('gov.uk schools sync failed', syncId, err);
     });
   });
@@ -113,60 +43,69 @@ export async function startGiasSyncAsync(csvOverride?: string): Promise<string> 
   return syncId;
 }
 
-// Internal: runs the actual sync work against an existing sync row. The
-// runGiasSync above creates+runs in one call (used for synchronous tests);
-// this variant lets the API route create the row, return, then run async.
-async function runGiasSyncBody(syncId: string, csvOverride?: string): Promise<void> {
+// Internal: streams rows out of the GIAS source (URL or pasted CSV) and
+// upserts them in serial batches. Memory stays bounded — we hold at most
+// one BATCH-sized array of rows at a time, so the full 25k-row register
+// imports comfortably under Render's 512MB cap.
+async function runGiasSyncBody(syncId: string, opts: SyncKickoffOptions): Promise<void> {
   const supabase = createAdminClient();
-  try {
-    let csv: string;
-    let sourceUrl = 'manual-upload';
-    if (csvOverride) {
-      csv = csvOverride;
-    } else {
-      const fetched = await fetchGiasCsv();
-      csv = fetched.csv;
-      sourceUrl = fetched.sourceUrl;
-    }
+  const BATCH = 500;
 
-    const rows = parseGiasCsv(csv);
-    if (rows.length === 0) {
-      throw new Error('Parsed CSV had zero rows — check the file format');
+  try {
+    let sourceUrl = 'manual-upload';
+    let rows: AsyncIterable<GiasRow> | Iterable<GiasRow>;
+    if (opts.csvOverride) {
+      rows = streamGiasRowsFromString(opts.csvOverride);
+    } else {
+      const { response, sourceUrl: url } = await resolveGiasResponse({
+        sourceUrlOverride: opts.sourceUrlOverride,
+      });
+      sourceUrl = url;
+      rows = streamGiasRowsFromResponse(response);
+      // Record the URL we actually fetched so the UI can show it.
+      await supabase
+        .from('schools_register_syncs')
+        .update({ source_url: sourceUrl })
+        .eq('id', syncId);
     }
 
     const now = new Date().toISOString();
-    const CHUNK = 2000;
-    const CONCURRENCY = 4;
-    const chunks: GiasRow[][] = [];
-    for (let i = 0; i < rows.length; i += CHUNK) {
-      chunks.push(rows.slice(i, i + CHUNK));
-    }
+    let batch: GiasRow[] = [];
+    let total = 0;
 
-    let nextChunk = 0;
-    let totalUpserted = 0;
-    const workers = Array.from({ length: Math.min(CONCURRENCY, chunks.length) }, async () => {
-      for (;;) {
-        const idx = nextChunk++;
-        if (idx >= chunks.length) return;
-        const chunk = chunks[idx].map((r) => ({ ...r, last_synced_at: now }));
-        const { error } = await supabase
-          .from('schools_register')
-          .upsert(chunk as unknown as Record<string, unknown>[], { onConflict: 'urn' });
-        if (error) throw new Error(`Upsert chunk ${idx} failed: ${error.message}`);
-        totalUpserted += chunk.length;
-        await supabase
-          .from('schools_register_syncs')
-          .update({ records_imported: totalUpserted })
-          .eq('id', syncId);
+    const flush = async () => {
+      if (batch.length === 0) return;
+      const chunk = batch.map((r) => ({ ...r, last_synced_at: now }));
+      const { error } = await supabase
+        .from('schools_register')
+        .upsert(chunk as unknown as Record<string, unknown>[], { onConflict: 'urn' });
+      if (error) throw new Error(`Upsert batch failed: ${error.message}`);
+      total += batch.length;
+      batch = []; // Drop the reference so V8 can reclaim the row objects.
+      // Surface progress so the UI poller has live numbers.
+      await supabase
+        .from('schools_register_syncs')
+        .update({ records_imported: total })
+        .eq('id', syncId);
+    };
+
+    for await (const row of rows) {
+      batch.push(row);
+      if (batch.length >= BATCH) {
+        await flush();
       }
-    });
-    await Promise.all(workers);
+    }
+    await flush();
+
+    if (total === 0) {
+      throw new Error('No rows parsed from CSV — wrong format?');
+    }
 
     await supabase
       .from('schools_register_syncs')
       .update({
         status: 'completed',
-        records_imported: totalUpserted,
+        records_imported: total,
         source_url: sourceUrl,
         finished_at: new Date().toISOString(),
       })
@@ -190,6 +129,8 @@ export type SchoolsSyncStatus = {
   lastSyncAt: string | null;
   lastSyncStatus: 'running' | 'completed' | 'failed' | null;
   lastError: string | null;
+  lastSourceUrl: string | null;
+  recordsImported: number;
 };
 
 export async function getSchoolsSyncStatus(): Promise<SchoolsSyncStatus> {
@@ -197,12 +138,12 @@ export async function getSchoolsSyncStatus(): Promise<SchoolsSyncStatus> {
 
   // Recover from zombie syncs: if the most-recent row is still 'running' but
   // started more than 5 minutes ago, the worker almost certainly died (e.g.
-  // a previous 502 from Render's proxy timing out the route). Mark it failed
+  // a previous OOM or Render's proxy timing out the route). Mark it failed
   // so the UI stops polling.
   const ZOMBIE_THRESHOLD_MS = 5 * 60 * 1000;
   const { data: latest } = await supabase
     .from('schools_register_syncs')
-    .select('id, status, started_at, records_imported')
+    .select('id, status, started_at')
     .order('started_at', { ascending: false })
     .limit(1)
     .maybeSingle();
@@ -213,7 +154,8 @@ export async function getSchoolsSyncStatus(): Promise<SchoolsSyncStatus> {
         .from('schools_register_syncs')
         .update({
           status: 'failed',
-          last_error: 'Worker died before completing (likely a request timeout). Try re-syncing.',
+          last_error:
+            'Worker died before completing (likely an OOM or request timeout). Try re-syncing.',
           finished_at: new Date().toISOString(),
         })
         .eq('id', latest.id as string);
@@ -228,7 +170,7 @@ export async function getSchoolsSyncStatus(): Promise<SchoolsSyncStatus> {
       .eq('status', 'Open'),
     supabase
       .from('schools_register_syncs')
-      .select('status, last_error, started_at, finished_at')
+      .select('status, last_error, started_at, finished_at, source_url, records_imported')
       .order('started_at', { ascending: false })
       .limit(1)
       .maybeSingle(),
@@ -238,6 +180,8 @@ export async function getSchoolsSyncStatus(): Promise<SchoolsSyncStatus> {
     last_error: string | null;
     started_at: string;
     finished_at: string | null;
+    source_url: string | null;
+    records_imported: number | null;
   } | null;
   return {
     totalSchools: totalSchools ?? 0,
@@ -245,6 +189,8 @@ export async function getSchoolsSyncStatus(): Promise<SchoolsSyncStatus> {
     lastSyncAt: last?.finished_at ?? last?.started_at ?? null,
     lastSyncStatus: last?.status ?? null,
     lastError: last?.last_error ?? null,
+    lastSourceUrl: last?.source_url ?? null,
+    recordsImported: last?.records_imported ?? 0,
   };
 }
 

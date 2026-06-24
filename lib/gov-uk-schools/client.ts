@@ -1,16 +1,19 @@
-// Downloads the 'Get Information About Schools' (GIAS) bulk CSV from gov.uk.
-// The file lives at a dated URL that changes daily — we try today's first,
-// then walk back a few days in case today's hasn't been generated yet. If
-// all fail we fall back to scraping the downloads page for the current
-// link.
-//
-// CSV is large (~25k rows, ~10MB) — we stream and parse line by line so we
-// don't blow the request memory.
+// Downloads + parses the gov.uk Get Information About Schools (GIAS) bulk
+// CSV. The whole file is ~10MB / ~25k rows so we stream-parse to keep
+// memory bounded — Render's 512MB instance OOMs if you materialise the
+// full row array up front.
 
 const URL_TEMPLATE = (yyyymmdd: string) =>
   `https://ea-edubase-api-prod.azurewebsites.net/edubase/downloads/public/edubasealldata${yyyymmdd}.csv`;
 
 const DOWNLOADS_PAGE = 'https://get-information-schools.service.gov.uk/Downloads';
+
+// Exported so the sync UI can show the operator exactly what's being tried
+// and the URL pattern, in case gov.uk ever changes the dated-file format
+// and we need to override.
+export const GIAS_URL_PATTERN =
+  'https://ea-edubase-api-prod.azurewebsites.net/edubase/downloads/public/edubasealldata{YYYYMMDD}.csv';
+export const GIAS_DOWNLOADS_PAGE = DOWNLOADS_PAGE;
 
 function ymd(d: Date): string {
   const y = d.getUTCFullYear();
@@ -19,9 +22,20 @@ function ymd(d: Date): string {
   return `${y}${m}${day}`;
 }
 
-export async function fetchGiasCsv(): Promise<{ csv: string; sourceUrl: string }> {
-  // Try today's dated URL, then yesterday's, then a week ago. Most days
-  // today's is ready by early morning UK time.
+// Resolves the GIAS CSV by URL — returns a Response whose body we'll stream.
+// Tries today's dated URL first, walks back a week, then scrapes the
+// downloads page as a last resort. Throws with a friendly message if none
+// work.
+export async function resolveGiasResponse(opts: { sourceUrlOverride?: string } = {}): Promise<{
+  response: Response;
+  sourceUrl: string;
+}> {
+  if (opts.sourceUrlOverride) {
+    const res = await fetch(opts.sourceUrlOverride, { redirect: 'follow' });
+    if (!res.ok) throw new Error(`Override URL returned HTTP ${res.status}`);
+    return { response: res, sourceUrl: opts.sourceUrlOverride };
+  }
+
   const candidates: string[] = [];
   const now = new Date();
   for (let offset = 0; offset < 7; offset++) {
@@ -33,31 +47,22 @@ export async function fetchGiasCsv(): Promise<{ csv: string; sourceUrl: string }
   for (const url of candidates) {
     try {
       const res = await fetch(url, { redirect: 'follow' });
-      if (res.ok) {
-        const csv = await res.text();
-        // Quick sanity check — the file should start with a header row that
-        // contains "URN".
-        if (csv.includes('URN')) return { csv, sourceUrl: url };
-      }
+      if (res.ok) return { response: res, sourceUrl: url };
     } catch {
       // try the next one
     }
   }
 
-  // Fallback: scrape the downloads page for the current establishment data
-  // link. The page lists files by date; we look for the most recent
-  // 'edubasealldata' CSV link.
+  // Last resort: scrape the downloads page for the current establishment data
+  // link. The page lists files by date; the regex picks up the most recent.
   try {
-    const res = await fetch(DOWNLOADS_PAGE, { redirect: 'follow' });
-    if (res.ok) {
-      const html = await res.text();
+    const pageRes = await fetch(DOWNLOADS_PAGE, { redirect: 'follow' });
+    if (pageRes.ok) {
+      const html = await pageRes.text();
       const match = html.match(/https?:\/\/[^"']+edubasealldata\d{8}\.csv/i);
       if (match) {
         const csvRes = await fetch(match[0], { redirect: 'follow' });
-        if (csvRes.ok) {
-          const csv = await csvRes.text();
-          if (csv.includes('URN')) return { csv, sourceUrl: match[0] };
-        }
+        if (csvRes.ok) return { response: csvRes, sourceUrl: match[0] };
       }
     }
   } catch {
@@ -65,11 +70,11 @@ export async function fetchGiasCsv(): Promise<{ csv: string; sourceUrl: string }
   }
 
   throw new Error(
-    'Could not fetch the GIAS schools CSV from gov.uk. The file may not be ready today — try again later, or download manually from https://get-information-schools.service.gov.uk/Downloads and paste via the manual upload.',
+    'Could not fetch the GIAS schools CSV from gov.uk. Try again later, or paste a custom URL from https://get-information-schools.service.gov.uk/Downloads.',
   );
 }
 
-// Parse a single CSV row that may contain quoted fields with embedded commas.
+// Splits a CSV row that may contain quoted fields with embedded commas.
 function splitCsvRow(line: string): string[] {
   const out: string[] = [];
   let buf = '';
@@ -130,8 +135,6 @@ export type GiasRow = {
   northing: number | null;
 };
 
-// GIAS column names we care about. Mapped to schools_register columns.
-// The CSV has 100+ columns; we only pull the ones we use.
 const COLUMN_MAP: Record<string, keyof GiasRow> = {
   URN: 'urn',
   EstablishmentName: 'establishment_name',
@@ -176,36 +179,116 @@ const NUMERIC_FIELDS = new Set<keyof GiasRow>([
   'northing',
 ]);
 
-export function parseGiasCsv(csv: string): GiasRow[] {
-  const lines = csv.replace(/\r\n/g, '\n').split('\n');
-  if (lines.length < 2) return [];
-  const header = splitCsvRow(lines[0]);
-  // For each CSV column, work out which schools_register column it maps to
-  // (or null to skip).
-  const colTargets: (keyof GiasRow | null)[] = header.map((h) => COLUMN_MAP[h] ?? null);
-
-  const rows: GiasRow[] = [];
-  for (let i = 1; i < lines.length; i++) {
-    if (!lines[i].trim()) continue;
-    const fields = splitCsvRow(lines[i]);
-    const row: Partial<GiasRow> = {};
-    for (let j = 0; j < fields.length; j++) {
-      const target = colTargets[j];
-      if (!target) continue;
-      const raw = fields[j].trim();
-      if (raw === '') continue;
-      if (NUMERIC_FIELDS.has(target)) {
-        const n = Number(raw);
-        if (Number.isFinite(n)) {
-          (row[target] as number) = Math.floor(n);
-        }
-      } else {
-        (row[target] as string) = raw;
+function parseRow(
+  line: string,
+  colTargets: (keyof GiasRow | null)[],
+): GiasRow | null {
+  const fields = splitCsvRow(line);
+  const row: Partial<GiasRow> = {};
+  for (let j = 0; j < fields.length; j++) {
+    const target = colTargets[j];
+    if (!target) continue;
+    const raw = fields[j].trim();
+    if (raw === '') continue;
+    if (NUMERIC_FIELDS.has(target)) {
+      const n = Number(raw);
+      if (Number.isFinite(n)) {
+        (row[target] as number) = Math.floor(n);
       }
-    }
-    if (row.urn && row.establishment_name) {
-      rows.push(row as GiasRow);
+    } else {
+      (row[target] as string) = raw;
     }
   }
-  return rows;
+  if (row.urn && row.establishment_name) {
+    return row as GiasRow;
+  }
+  return null;
+}
+
+// Streams rows out of an HTTP response body. Holds only the rolling text
+// buffer + the current line — never the full CSV or row array. This is the
+// hot path that prevents Render OOMs on a 25k-row import.
+export async function* streamGiasRowsFromResponse(
+  response: Response,
+): AsyncIterable<GiasRow> {
+  if (!response.body) throw new Error('Response had no body');
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder('utf-8');
+  let buffer = '';
+  let colTargets: (keyof GiasRow | null)[] | null = null;
+  let validated = false;
+
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (value) buffer += decoder.decode(value, { stream: true });
+      if (done) buffer += decoder.decode();
+
+      let nl: number;
+      while ((nl = buffer.indexOf('\n')) !== -1) {
+        let line = buffer.slice(0, nl);
+        buffer = buffer.slice(nl + 1);
+        if (line.endsWith('\r')) line = line.slice(0, -1);
+        if (!line.trim()) continue;
+
+        if (!colTargets) {
+          if (!line.includes('URN')) {
+            throw new Error(
+              "Response doesn't look like a GIAS CSV (header has no 'URN' column).",
+            );
+          }
+          const header = splitCsvRow(line);
+          colTargets = header.map((h) => COLUMN_MAP[h] ?? null);
+          validated = true;
+          continue;
+        }
+
+        const row = parseRow(line, colTargets);
+        if (row) yield row;
+      }
+
+      if (done) {
+        // Flush trailing line without newline.
+        if (buffer.trim() && colTargets) {
+          const row = parseRow(buffer.trim(), colTargets);
+          if (row) yield row;
+          buffer = '';
+        }
+        break;
+      }
+    }
+    if (!validated) throw new Error('Empty response from GIAS URL.');
+  } finally {
+    reader.releaseLock();
+  }
+}
+
+// Streams rows out of a CSV string (manual paste / upload). Uses indexOf
+// rather than split() to avoid materialising a 25k-element line array on
+// top of the source string. Synchronous generator since no I/O.
+export function* streamGiasRowsFromString(csv: string): Iterable<GiasRow> {
+  let colTargets: (keyof GiasRow | null)[] | null = null;
+  let pos = 0;
+  const len = csv.length;
+
+  while (pos < len) {
+    let nl = csv.indexOf('\n', pos);
+    if (nl === -1) nl = len;
+    let line = csv.slice(pos, nl);
+    if (line.endsWith('\r')) line = line.slice(0, -1);
+    pos = nl + 1;
+    if (!line.trim()) continue;
+
+    if (!colTargets) {
+      if (!line.includes('URN')) {
+        throw new Error("CSV header has no 'URN' column — wrong format?");
+      }
+      const header = splitCsvRow(line);
+      colTargets = header.map((h) => COLUMN_MAP[h] ?? null);
+      continue;
+    }
+
+    const row = parseRow(line, colTargets);
+    if (row) yield row;
+  }
 }
