@@ -4,6 +4,7 @@
 
 const GEOCODE_URL = 'https://maps.googleapis.com/maps/api/geocode/json';
 const NEARBY_URL = 'https://maps.googleapis.com/maps/api/place/nearbysearch/json';
+const TEXT_SEARCH_URL = 'https://maps.googleapis.com/maps/api/place/textsearch/json';
 const DETAILS_URL = 'https://maps.googleapis.com/maps/api/place/details/json';
 
 function apiKey(): string {
@@ -101,6 +102,7 @@ export type NearbyResult = {
   rating?: number;
   user_ratings_total?: number;
   types?: string[];
+  geometry?: { location?: { lat: number; lng: number } };
 };
 
 type NearbyResponse = {
@@ -224,6 +226,71 @@ export async function placeDetails(placeId: string): Promise<PlaceDetails | null
   const data = (await res.json()) as { status: string; result?: PlaceDetails };
   if (data.status !== 'OK' || !data.result) return null;
   return data.result;
+}
+
+type TextSearchResponse = {
+  status: string;
+  error_message?: string;
+  results?: NearbyResult[];
+  next_page_token?: string;
+};
+
+// Free-text Place Search. Returns up to 60 results across 3 pages.
+// Used for Stage 1 of the estate-sweep mode to find named parks / estates.
+export async function textSearch(query: string): Promise<NearbyResult[]> {
+  const out: NearbyResult[] = [];
+  let pageToken: string | null = null;
+  for (let page = 0; page < 3; page++) {
+    let params: URLSearchParams;
+    if (pageToken) {
+      params = new URLSearchParams({ pagetoken: pageToken, key: apiKey() });
+      await sleep(2000);
+    } else {
+      params = new URLSearchParams({ query, key: apiKey(), region: 'gb' });
+    }
+    const res = await fetch(`${TEXT_SEARCH_URL}?${params.toString()}`);
+    if (!res.ok) throw new Error(`Text search HTTP ${res.status}`);
+    const data = (await res.json()) as TextSearchResponse;
+    if (data.status === 'REQUEST_DENIED') {
+      throw new Error(`Google rejected the request: ${data.error_message ?? 'no detail'}`);
+    }
+    if (data.status === 'OVER_QUERY_LIMIT') {
+      throw new Error('Google Places query limit exceeded');
+    }
+    for (const r of data.results ?? []) out.push(r);
+    if (!data.next_page_token) break;
+    pageToken = data.next_page_token;
+  }
+  return out;
+}
+
+// Tight nearby search around a single point (no grid). Used for Stage 2 of
+// estate-sweep to enumerate every business sitting inside / next to a park
+// or office building.
+export async function nearbyAroundPoint(args: {
+  lat: number;
+  lng: number;
+  radiusM: number;
+  type?: string;
+}): Promise<NearbyResult[]> {
+  const out: NearbyResult[] = [];
+  const seen = new Set<string>();
+  let pageToken: string | null = null;
+  for (let page = 0; page < 3; page++) {
+    const { results, nextPageToken } = await nearbyPage(args.lat, args.lng, args.radiusM, {
+      type: args.type ?? 'establishment',
+      keyword: null,
+      pageToken,
+    });
+    for (const r of results) {
+      if (!r.place_id || seen.has(r.place_id)) continue;
+      seen.add(r.place_id);
+      out.push(r);
+    }
+    if (!nextPageToken) break;
+    pageToken = nextPageToken;
+  }
+  return out;
 }
 
 export const PLACE_CATEGORIES = [

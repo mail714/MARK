@@ -9,12 +9,15 @@ export async function createSearch(args: Partial<ChimeraSearch> & {
     .from('chimera_searches')
     .insert({
       source: args.source,
+      search_mode: args.search_mode ?? 'grid',
       location: args.location ?? null,
       category: args.category ?? null,
       category_label: args.category_label ?? null,
       grid_radius_m: args.grid_radius_m ?? null,
       grid_overlap_pct: args.grid_overlap_pct ?? null,
       max_results: args.max_results ?? null,
+      sweep_seeds: args.sweep_seeds ?? [],
+      sweep_radius_m: args.sweep_radius_m ?? null,
       apply_chain_filter: args.apply_chain_filter ?? true,
       notes: args.notes ?? null,
       status: 'pending',

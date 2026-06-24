@@ -1,11 +1,12 @@
 import { NextResponse } from 'next/server';
 import { createSearch } from '@/lib/chimera/searches';
-import { runGooglePlacesSearch } from '@/lib/chimera/search-orchestrator';
+import {
+  runEstateSweepSearch,
+  runGooglePlacesSearch,
+} from '@/lib/chimera/search-orchestrator';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
-// Search can run for many minutes — we kick off the work in the background
-// (unawaited promise) and return immediately so the UI can poll status.
 export const maxDuration = 60;
 
 export async function POST(req: Request) {
@@ -17,16 +18,55 @@ export async function POST(req: Request) {
   }
 
   const location = typeof body.location === 'string' ? body.location.trim() : '';
-  const category = typeof body.category === 'string' ? body.category.trim() : '';
+  const mode = body.search_mode === 'estate-sweep' ? 'estate-sweep' : 'grid';
   const categoryLabel =
-    typeof body.category_label === 'string' ? body.category_label.trim() : category;
-  if (!location || !category) {
-    return NextResponse.json({ error: 'location and category are required' }, { status: 400 });
+    typeof body.category_label === 'string' ? body.category_label.trim() : '';
+
+  if (!location || !categoryLabel) {
+    return NextResponse.json(
+      { error: 'location and category_label are required' },
+      { status: 400 },
+    );
   }
 
   try {
+    if (mode === 'estate-sweep') {
+      const seeds = Array.isArray(body.sweep_seeds)
+        ? (body.sweep_seeds as unknown[]).filter((s): s is string => typeof s === 'string' && s.trim().length > 0)
+        : [];
+      if (seeds.length === 0) {
+        return NextResponse.json(
+          { error: 'sweep_seeds[] is required for estate-sweep mode' },
+          { status: 400 },
+        );
+      }
+      const id = await createSearch({
+        source: 'google-places',
+        search_mode: 'estate-sweep',
+        location,
+        category_label: categoryLabel,
+        sweep_seeds: seeds,
+        sweep_radius_m: clampInt(body.sweep_radius_m, 100, 2000, 400),
+        max_results: clampInt(body.max_results, 10, 5000, 500),
+        apply_chain_filter: body.apply_chain_filter === true,
+        notes: typeof body.notes === 'string' ? body.notes : null,
+      });
+      setImmediate(() => {
+        runEstateSweepSearch(id).catch((err) => {
+          console.error('chimera estate-sweep failed', id, err);
+        });
+      });
+      return NextResponse.json({ ok: true, id });
+    }
+
+    // grid mode
+    const category = typeof body.category === 'string' ? body.category.trim() : '';
+    if (!category) {
+      return NextResponse.json({ error: 'category is required for grid mode' }, { status: 400 });
+    }
     const id = await createSearch({
       source: 'google-places',
+      search_mode: 'grid',
       location,
       category,
       category_label: categoryLabel,
@@ -36,15 +76,11 @@ export async function POST(req: Request) {
       apply_chain_filter: body.apply_chain_filter !== false,
       notes: typeof body.notes === 'string' ? body.notes : null,
     });
-
-    // Fire and forget — the long-running search executes after the response
-    // is sent. Errors are persisted to the search row (status='failed').
     setImmediate(() => {
       runGooglePlacesSearch(id).catch((err) => {
-        console.error('chimera search failed', id, err);
+        console.error('chimera grid search failed', id, err);
       });
     });
-
     return NextResponse.json({ ok: true, id });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

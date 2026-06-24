@@ -1,15 +1,19 @@
 export type ChimeraSearchStatus = 'pending' | 'running' | 'completed' | 'failed';
 export type ChimeraSource = 'google-places' | 'csv-import';
+export type ChimeraSearchMode = 'grid' | 'estate-sweep';
 
 export type ChimeraSearch = {
   id: string;
   source: ChimeraSource;
+  search_mode: ChimeraSearchMode;
   location: string | null;
   category: string | null;
   category_label: string | null;
   grid_radius_m: number | null;
   grid_overlap_pct: number | null;
   max_results: number | null;
+  sweep_seeds: string[];
+  sweep_radius_m: number | null;
   apply_chain_filter: boolean;
   status: ChimeraSearchStatus;
   prospects_found: number;
