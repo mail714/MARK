@@ -44,6 +44,12 @@ export default async function ChimeraPage() {
             Sources
           </Link>
           <Link
+            href="/chimera/saved"
+            className="rounded-md border border-neutral-300 bg-white px-3 py-1.5 text-xs font-medium text-neutral-700 hover:bg-neutral-50"
+          >
+            Saved segments
+          </Link>
+          <Link
             href="/chimera/prospects"
             className="rounded-md border border-neutral-300 bg-white px-3 py-1.5 text-xs font-medium text-neutral-700 hover:bg-neutral-50"
           >

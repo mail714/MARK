@@ -1,9 +1,13 @@
 import { createAdminClient } from '@/lib/supabase/admin';
 import type { ChimeraSearch, ChimeraSearchStatus } from './types';
 
-export async function createSearch(args: Partial<ChimeraSearch> & {
-  source: ChimeraSearch['source'];
-}): Promise<string> {
+export async function createSearch(
+  args: Partial<ChimeraSearch> & {
+    source: ChimeraSearch['source'];
+    saved_search_id?: string | null;
+    original_payload?: Record<string, unknown> | null;
+  },
+): Promise<string> {
   const supabase = createAdminClient();
   const { data, error } = await supabase
     .from('chimera_searches')
@@ -22,6 +26,8 @@ export async function createSearch(args: Partial<ChimeraSearch> & {
       apply_chain_filter: args.apply_chain_filter ?? true,
       notes: args.notes ?? null,
       status: 'pending',
+      saved_search_id: args.saved_search_id ?? null,
+      original_payload: args.original_payload ?? null,
     })
     .select('id')
     .single();

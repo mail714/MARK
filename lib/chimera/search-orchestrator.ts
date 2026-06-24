@@ -177,6 +177,7 @@ export async function runGooglePlacesSearch(searchId: string): Promise<void> {
       prospects_with_website: withWebsite,
       chains_skipped: chainsSkipped,
     });
+    await maybeRecordSavedRun(searchId);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     await updateSearch(searchId, {
@@ -186,6 +187,28 @@ export async function runGooglePlacesSearch(searchId: string): Promise<void> {
     });
     throw err;
   }
+}
+
+// Bumps the saved_search row's last_run_prospects + last_run_at after a
+// search completes, when that search was linked to a saved segment. No-op
+// if the search wasn't from a saved segment.
+async function maybeRecordSavedRun(searchId: string): Promise<void> {
+  const supabase = createAdminClient();
+  const { data } = await supabase
+    .from('chimera_searches')
+    .select('saved_search_id, prospects_found')
+    .eq('id', searchId)
+    .maybeSingle();
+  if (!data) return;
+  const row = data as { saved_search_id: string | null; prospects_found: number };
+  if (!row.saved_search_id) return;
+  await supabase
+    .from('saved_searches')
+    .update({
+      last_run_prospects: row.prospects_found,
+      last_run_at: new Date().toISOString(),
+    })
+    .eq('id', row.saved_search_id);
 }
 
 async function runWithConcurrency<T>(
@@ -312,6 +335,7 @@ export async function runEstateSweepSearch(searchId: string): Promise<void> {
       status: 'completed',
       finished_at: new Date().toISOString(),
     });
+    await maybeRecordSavedRun(searchId);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     await updateSearch(searchId, {

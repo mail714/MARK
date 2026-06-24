@@ -1,4 +1,5 @@
 import { searchSchools } from '@/lib/gov-uk-schools/sync';
+import { createAdminClient } from '@/lib/supabase/admin';
 import { getSearch, updateSearch } from '../searches';
 import { upsertProspect, loadSuppressionIndex, isSuppressed } from '../prospects';
 import { domainOf, scrapeWebsiteForEmailsAndAddress } from '../website-scrape';
@@ -122,6 +123,25 @@ export async function runGovUkSchoolsSearch(searchId: string): Promise<void> {
       finished_at: new Date().toISOString(),
       prospects_found: schools.length - chainsSkipped,
     });
+
+    // If this run was kicked off from a saved segment, bump its
+    // last_run_prospects so the saved-searches list shows fresh counts.
+    const supabase = createAdminClient();
+    const { data: row } = await supabase
+      .from('chimera_searches')
+      .select('saved_search_id')
+      .eq('id', searchId)
+      .maybeSingle();
+    const savedSearchId = (row as { saved_search_id: string | null } | null)?.saved_search_id;
+    if (savedSearchId) {
+      await supabase
+        .from('saved_searches')
+        .update({
+          last_run_prospects: schools.length - chainsSkipped,
+          last_run_at: new Date().toISOString(),
+        })
+        .eq('id', savedSearchId);
+    }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     await updateSearch(searchId, {

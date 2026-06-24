@@ -27,6 +27,8 @@ export type ChimeraSearch = {
   last_error: string | null;
   started_at: string | null;
   finished_at: string | null;
+  saved_search_id: string | null;
+  original_payload: Record<string, unknown> | null;
   created_at: string;
   updated_at: string;
 };
