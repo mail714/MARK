@@ -1,0 +1,91 @@
+import { createAdminClient } from '@/lib/supabase/admin';
+import { dotdigital } from '@/lib/dotdigital/client';
+
+// Push approved prospects (with an email) into a specific dotdigital address
+// book. dotdigital's /v2/address-books/{id}/contacts endpoint accepts a single
+// contact at a time and returns the created/updated contact. We loop and
+// collect successes vs failures so the operator sees both.
+
+type DotdigitalContact = {
+  email: string;
+  optInType?: 'Single' | 'Double' | 'VerifiedDouble' | 'Unknown';
+  emailType?: 'PlainText' | 'Html';
+  dataFields?: Array<{ key: string; value: string }>;
+};
+
+async function pushOne(addressBookId: number, contact: DotdigitalContact): Promise<{ id: number }> {
+  return await dotdigital.post<{ id: number }>(
+    `/v2/address-books/${addressBookId}/contacts`,
+    contact,
+  );
+}
+
+export type PushResult = {
+  pushed: number;
+  failed: number;
+  skipped: number;
+  errors: Array<{ prospectId: string; reason: string }>;
+};
+
+export async function pushProspectsToBook(args: {
+  prospectIds: string[];
+  brandId: string;
+  addressBookId: number;
+}): Promise<PushResult> {
+  const supabase = createAdminClient();
+  const { data: prospects, error } = await supabase
+    .from('prospects')
+    .select('id, business_name, emails, phone, website')
+    .in('id', args.prospectIds);
+  if (error) throw new Error(`Failed to load prospects: ${error.message}`);
+
+  const out: PushResult = { pushed: 0, failed: 0, skipped: 0, errors: [] };
+  const now = new Date().toISOString();
+
+  for (const p of (prospects ?? []) as Array<{
+    id: string;
+    business_name: string;
+    emails: string[];
+    phone: string | null;
+    website: string | null;
+  }>) {
+    if (!p.emails || p.emails.length === 0) {
+      out.skipped += 1;
+      out.errors.push({ prospectId: p.id, reason: 'No email on prospect' });
+      continue;
+    }
+    // dotdigital is one-contact-per-email — push the first email found and
+    // record the rest as data fields so the operator can see them in the UI.
+    const primary = p.emails[0];
+    const contact: DotdigitalContact = {
+      email: primary,
+      optInType: 'Single',
+      emailType: 'Html',
+      dataFields: [
+        { key: 'FIRSTNAME', value: p.business_name },
+        ...(p.phone ? [{ key: 'TELEPHONE', value: p.phone }] : []),
+        ...(p.website ? [{ key: 'WEBSITE', value: p.website }] : []),
+      ],
+    };
+
+    try {
+      await pushOne(args.addressBookId, contact);
+      await supabase
+        .from('prospect_brand_assignments')
+        .update({
+          status: 'pushed',
+          pushed_to_dotdigital_book_id: args.addressBookId,
+          pushed_at: now,
+        })
+        .eq('prospect_id', p.id)
+        .eq('brand_id', args.brandId);
+      out.pushed += 1;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      out.failed += 1;
+      out.errors.push({ prospectId: p.id, reason: message });
+    }
+  }
+
+  return out;
+}
