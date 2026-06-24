@@ -76,9 +76,6 @@ async function fetchDebug(url: string, expected: string | null): Promise<DebugFe
       const wanted = expected.toLowerCase();
       const haystack = html.toLowerCase();
       result.expectedEmailInHtml = haystack.includes(wanted);
-      // Also check if the email is present in obfuscated form (HTML
-      // entities, [at], etc.) — useful to distinguish 'absent' from
-      // 'present-but-encoded'.
       const local = wanted.split('@')[0];
       const domain = wanted.split('@')[1] ?? '';
       const obfuscatedPatterns = [
@@ -94,9 +91,28 @@ async function fetchDebug(url: string, expected: string | null): Promise<DebugFe
       );
     }
   } catch (err) {
-    result.error = err instanceof Error ? err.message : String(err);
+    result.error = describeFetchError(err);
   }
   return result;
+}
+
+// Node's fetch wraps every network failure as 'fetch failed' — the real
+// reason lives in err.cause. Unpack a few common shapes (DNS, TLS, conn
+// refused, undici errors) so the diagnostic page shows ENOTFOUND vs
+// CERT_HAS_EXPIRED vs ECONNREFUSED rather than just 'fetch failed'.
+function describeFetchError(err: unknown): string {
+  if (!(err instanceof Error)) return String(err);
+  const parts = [err.message];
+  const cause = (err as { cause?: unknown }).cause;
+  if (cause && typeof cause === 'object') {
+    const c = cause as { message?: string; code?: string; errno?: number; reason?: string };
+    if (c.code) parts.push(`code=${c.code}`);
+    if (c.errno) parts.push(`errno=${c.errno}`);
+    if (c.message) parts.push(c.message);
+    if (c.reason) parts.push(`reason=${c.reason}`);
+  }
+  if (err.name && err.name !== 'Error') parts.push(`name=${err.name}`);
+  return parts.filter(Boolean).join(' · ');
 }
 
 export async function debugScrape(args: {

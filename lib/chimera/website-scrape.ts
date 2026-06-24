@@ -203,7 +203,23 @@ async function fetchPage(url: string): Promise<string | null> {
     clearTimeout(timer);
     if (!res.ok) return null;
     return await res.text();
-  } catch {
+  } catch (err) {
+    // Surface the underlying cause to Render logs — fetch failures are
+    // often DNS/TLS/refused at the network layer, which we'd otherwise
+    // silently swallow as 'no email found'.
+    const cause = err instanceof Error ? (err as { cause?: unknown }).cause : null;
+    const causeBits: string[] = [];
+    if (cause && typeof cause === 'object') {
+      const c = cause as { code?: string; errno?: number; message?: string };
+      if (c.code) causeBits.push(`code=${c.code}`);
+      if (c.errno) causeBits.push(`errno=${c.errno}`);
+      if (c.message) causeBits.push(c.message);
+    }
+    console.warn(
+      `website-scrape fetch failed for ${url}:`,
+      err instanceof Error ? err.message : err,
+      causeBits.length > 0 ? `(${causeBits.join(', ')})` : '',
+    );
     return null;
   }
 }
