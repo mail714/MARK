@@ -103,10 +103,17 @@ export function ProspectsReview({
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error ?? `Enrich failed (${res.status})`);
-      const errCount = Array.isArray(data.errors) ? data.errors.length : 0;
+      const errs: Array<{ prospectId: string; reason: string }> = Array.isArray(data.errors)
+        ? data.errors
+        : [];
+      const errCount = errs.length;
+      const firstError = errs[0]?.reason;
       setMessage(
         `Apollo: tried ${data.prospectsTried} · ${data.contactsAdded} contacts found · ${data.emailsAdded} new emails${errCount > 0 ? ` · ${errCount} errors` : ''}.`,
       );
+      if (errCount > 0 && firstError) {
+        setError(`First error: ${firstError}`);
+      }
       router.refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));

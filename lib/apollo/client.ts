@@ -67,11 +67,15 @@ type PeopleSearchResponse = {
   pagination?: { total_entries?: number };
 };
 
-// Apollo's people search. The endpoint was renamed from /mixed_people/search
-// to /mixed_people/api_search in their 2025 API refresh. Returns the top N
-// people at the queried organization, biased by the seniority filter to
-// pull decision-makers first.
-const PEOPLE_SEARCH_PATH = '/v1/mixed_people/api_search';
+// Apollo's people-search endpoint has been renamed multiple times in their
+// API revisions — /mixed_people/search → /mixed_people/api_search →
+// /people/search depending on plan and date. We try each in order and use
+// whichever responds, so the integration survives Apollo's renames.
+const PEOPLE_SEARCH_PATHS = [
+  '/v1/mixed_people/api_search',
+  '/v1/mixed_people/search',
+  '/v1/people/search',
+];
 
 const DECISION_MAKER_SENIORITIES = [
   'owner',
@@ -83,6 +87,24 @@ const DECISION_MAKER_SENIORITIES = [
   'manager',
 ];
 
+async function tryPeopleSearchPaths(body: Record<string, unknown>): Promise<ApolloPerson[]> {
+  let lastErr: ApolloError | null = null;
+  for (const path of PEOPLE_SEARCH_PATHS) {
+    try {
+      const data = await request<PeopleSearchResponse>(path, body);
+      return data.people ?? [];
+    } catch (err) {
+      if (err instanceof ApolloError && (err.statusCode === 404 || err.statusCode === 403)) {
+        // Endpoint isn't on this plan or has been removed — try the next one.
+        lastErr = err;
+        continue;
+      }
+      throw err;
+    }
+  }
+  throw lastErr ?? new ApolloError('No working people-search endpoint found.', 404);
+}
+
 // Looks up people at organisations whose registered domain matches the
 // argument. Per_page caps the credit spend per prospect — Apollo charges
 // one credit per unlocked contact in the result set.
@@ -91,13 +113,12 @@ export async function searchPeopleByDomain(args: {
   perPage?: number;
 }): Promise<ApolloPerson[]> {
   const perPage = Math.min(Math.max(args.perPage ?? 2, 1), 10);
-  const data = await request<PeopleSearchResponse>(PEOPLE_SEARCH_PATH, {
+  return tryPeopleSearchPaths({
     q_organization_domains_list: [args.domain],
     per_page: perPage,
     page: 1,
     person_seniorities: DECISION_MAKER_SENIORITIES,
   });
-  return data.people ?? [];
 }
 
 // Same idea but matched against the organisation name. Used for prospects
@@ -107,13 +128,12 @@ export async function searchPeopleByOrganisationName(args: {
   perPage?: number;
 }): Promise<ApolloPerson[]> {
   const perPage = Math.min(Math.max(args.perPage ?? 2, 1), 10);
-  const data = await request<PeopleSearchResponse>(PEOPLE_SEARCH_PATH, {
+  return tryPeopleSearchPaths({
     q_organization_name: args.name,
     per_page: perPage,
     page: 1,
     person_seniorities: DECISION_MAKER_SENIORITIES,
   });
-  return data.people ?? [];
 }
 
 // Apollo returns a placeholder string for emails that exist in their DB
