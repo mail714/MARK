@@ -18,6 +18,7 @@ export async function createSearch(args: Partial<ChimeraSearch> & {
       max_results: args.max_results ?? null,
       sweep_seeds: args.sweep_seeds ?? [],
       sweep_radius_m: args.sweep_radius_m ?? null,
+      pull_companies_house: args.pull_companies_house ?? false,
       apply_chain_filter: args.apply_chain_filter ?? true,
       notes: args.notes ?? null,
       status: 'pending',

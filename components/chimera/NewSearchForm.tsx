@@ -13,6 +13,7 @@ export function NewSearchForm() {
   const [overlap, setOverlap] = useState(40);
   const [maxResults, setMaxResults] = useState(500);
   const [chainFilterOverride, setChainFilterOverride] = useState<boolean | null>(null);
+  const [pullCompaniesHouse, setPullCompaniesHouse] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -62,6 +63,7 @@ export function NewSearchForm() {
         sweep_radius_m: category.sweepRadiusM,
         max_results: maxResults,
         apply_chain_filter: applyChainFilter,
+        pull_companies_house: pullCompaniesHouse,
       };
     } else if (category && category.mode === 'grid') {
       const cat = category.type ?? category.keyword ?? category.label;
@@ -215,6 +217,23 @@ export function NewSearchForm() {
         Skip large chains (restaurants, pubs, hotels). Default for this category:{' '}
         <strong>{defaultChainFilter ? 'on' : 'off'}</strong>.
       </label>
+
+      {mode === 'estate-sweep' ? (
+        <label className="flex items-start gap-2 text-xs text-neutral-700">
+          <input
+            type="checkbox"
+            checked={pullCompaniesHouse}
+            onChange={(e) => setPullCompaniesHouse(e.target.checked)}
+            className="mt-0.5"
+          />
+          <span>
+            Also pull Companies House — for every postcode found, look up every
+            registered active company. Catches businesses too small to have a Google
+            listing. Adds SIC industry codes. No emails (Companies House doesn&apos;t expose
+            contact details), but reveals who&apos;s on the estate.
+          </span>
+        </label>
+      ) : null}
 
       <div className="flex items-center justify-between gap-3 border-t border-neutral-200 pt-3">
         {error ? <div className="text-xs text-red-600">{error}</div> : <div />}

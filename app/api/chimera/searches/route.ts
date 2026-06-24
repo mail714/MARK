@@ -48,6 +48,7 @@ export async function POST(req: Request) {
         sweep_seeds: seeds,
         sweep_radius_m: clampInt(body.sweep_radius_m, 100, 2000, 400),
         max_results: clampInt(body.max_results, 10, 5000, 500),
+        pull_companies_house: body.pull_companies_house === true,
         apply_chain_filter: body.apply_chain_filter === true,
         notes: typeof body.notes === 'string' ? body.notes : null,
       });

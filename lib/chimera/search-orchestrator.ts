@@ -15,6 +15,8 @@ import {
   scrapeWebsiteForEmailsAndAddress,
 } from './website-scrape';
 import { loadSuppressionIndex, isSuppressed, upsertProspect } from './prospects';
+import { enrichSearchWithCompaniesHouse } from './sources/companies-house';
+import { createAdminClient } from '@/lib/supabase/admin';
 
 const WEBSITE_WORKER_CONCURRENCY = 6;
 
@@ -272,6 +274,39 @@ export async function runEstateSweepSearch(searchId: string): Promise<void> {
 
     // Stage 3: enrichment — same pipeline as the grid runner.
     await enrichAndPersist(searchId, search, tenants);
+
+    // Stage 4 (optional): Companies House — for every postcode we've now
+    // confirmed for this search, look up active registered companies and
+    // either enrich an existing prospect or insert as 'companies-house'.
+    if (search.pull_companies_house) {
+      const supabase = createAdminClient();
+      const { data: rows } = await supabase
+        .from('prospects')
+        .select('postcode')
+        .in('id', await (async () => {
+          const { data } = await supabase
+            .from('prospect_searches')
+            .select('prospect_id')
+            .eq('search_id', searchId);
+          return ((data ?? []) as { prospect_id: string }[]).map((r) => r.prospect_id);
+        })());
+      const postcodes = ((rows ?? []) as { postcode: string | null }[])
+        .map((r) => r.postcode)
+        .filter((p): p is string => !!p);
+      try {
+        await enrichSearchWithCompaniesHouse(searchId, postcodes);
+        // Re-tally found counter since CH may have added new rows.
+        const { count } = await supabase
+          .from('prospect_searches')
+          .select('prospect_id', { count: 'exact', head: true })
+          .eq('search_id', searchId);
+        if (count !== null) {
+          await updateSearch(searchId, { prospects_found: count });
+        }
+      } catch (err) {
+        console.warn('Companies House enrichment failed:', err instanceof Error ? err.message : err);
+      }
+    }
 
     await updateSearch(searchId, {
       status: 'completed',

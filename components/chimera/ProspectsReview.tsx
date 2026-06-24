@@ -254,6 +254,28 @@ export function ProspectsReview({
                       {p.website}
                     </a>
                   ) : null}
+                  {p.company_number || (p.sic_codes && p.sic_codes.length > 0) ? (
+                    <div className="mt-0.5 flex flex-wrap items-center gap-1 text-[10px]">
+                      {p.company_number ? (
+                        <a
+                          href={`https://find-and-update.company-information.service.gov.uk/company/${p.company_number}`}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="font-mono text-neutral-500 hover:underline"
+                        >
+                          CH #{p.company_number}
+                        </a>
+                      ) : null}
+                      {(p.sic_codes ?? []).slice(0, 3).map((s) => (
+                        <span
+                          key={s}
+                          className="rounded-full bg-neutral-100 px-1.5 py-0 font-mono text-neutral-700 ring-1 ring-neutral-200"
+                        >
+                          {s}
+                        </span>
+                      ))}
+                    </div>
+                  ) : null}
                 </td>
                 <td className="px-3 py-2 text-xs text-neutral-600">
                   <div className="max-w-xs">{p.address ?? '—'}</div>

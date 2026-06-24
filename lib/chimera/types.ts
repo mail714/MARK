@@ -14,6 +14,7 @@ export type ChimeraSearch = {
   max_results: number | null;
   sweep_seeds: string[];
   sweep_radius_m: number | null;
+  pull_companies_house: boolean;
   apply_chain_filter: boolean;
   status: ChimeraSearchStatus;
   prospects_found: number;
@@ -47,6 +48,8 @@ export type Prospect = {
   reviews: number | null;
   types: string[];
   raw: Record<string, unknown> | null;
+  sic_codes: string[];
+  company_number: string | null;
   is_chain: boolean;
   chain_reason: string | null;
   first_found_at: string;
