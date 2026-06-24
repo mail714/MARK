@@ -60,6 +60,16 @@ export async function getSearch(id: string): Promise<ChimeraSearch | null> {
   return (data as ChimeraSearch | null) ?? null;
 }
 
+// Deletes the search row + its prospect_searches links (cascade). Prospects
+// themselves are kept — they may be linked to other searches, or already
+// pushed to dotdigital. Operator can purge prospects separately from
+// /chimera/prospects if they want.
+export async function deleteSearch(id: string): Promise<void> {
+  const supabase = createAdminClient();
+  const { error } = await supabase.from('chimera_searches').delete().eq('id', id);
+  if (error) throw new Error(`Failed to delete search: ${error.message}`);
+}
+
 export async function listSearches(): Promise<ChimeraSearch[]> {
   const supabase = createAdminClient();
   const { data, error } = await supabase

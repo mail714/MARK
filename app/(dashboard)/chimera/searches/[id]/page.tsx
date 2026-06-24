@@ -4,6 +4,7 @@ import { getSearch } from '@/lib/chimera/searches';
 import { listProspects } from '@/lib/chimera/prospects';
 import { listBrands } from '@/lib/brands';
 import { getAddressBooks } from '@/lib/email/address-books';
+import { DeleteSearchButton } from '@/components/chimera/DeleteSearchButton';
 import { SearchProgress } from '@/components/chimera/SearchProgress';
 import { ProspectsReview } from '@/components/chimera/ProspectsReview';
 
@@ -26,18 +27,26 @@ export default async function ChimeraSearchPage({
 
   return (
     <div className="space-y-6">
-      <header>
-        <Link href="/chimera" className="text-xs text-neutral-500 hover:text-neutral-700">
-          ← All searches
-        </Link>
-        <h1 className="mt-1 text-2xl font-semibold tracking-tight">
-          {search.category_label ?? search.category ?? 'Search'}
-          {search.location ? <span className="ml-2 font-normal text-neutral-500">· {search.location}</span> : null}
-        </h1>
-        <p className="mt-1 text-xs text-neutral-500">
-          Source: {search.source}
-          {search.notes ? <> · {search.notes}</> : null}
-        </p>
+      <header className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <Link href="/chimera" className="text-xs text-neutral-500 hover:text-neutral-700">
+            ← All searches
+          </Link>
+          <h1 className="mt-1 text-2xl font-semibold tracking-tight">
+            {search.category_label ?? search.category ?? 'Search'}
+            {search.location ? <span className="ml-2 font-normal text-neutral-500">· {search.location}</span> : null}
+          </h1>
+          <p className="mt-1 text-xs text-neutral-500">
+            Source: {search.source}
+            {search.notes ? <> · {search.notes}</> : null}
+          </p>
+        </div>
+        <DeleteSearchButton
+          searchId={search.id}
+          label={search.category_label ?? search.category ?? search.location ?? 'Untitled'}
+          redirectTo="/chimera"
+          variant="button"
+        />
       </header>
 
       <SearchProgress initial={search} />

@@ -1,5 +1,6 @@
 import Link from 'next/link';
 import { listSearches } from '@/lib/chimera/searches';
+import { DeleteSearchButton } from '@/components/chimera/DeleteSearchButton';
 
 export const dynamic = 'force-dynamic';
 
@@ -76,6 +77,7 @@ export default async function ChimeraPage() {
                 <th className="px-3 py-2 text-right">Found</th>
                 <th className="px-3 py-2 text-right">With email</th>
                 <th className="px-3 py-2">Started</th>
+                <th className="px-3 py-2"></th>
               </tr>
             </thead>
             <tbody>
@@ -107,6 +109,12 @@ export default async function ChimeraPage() {
                     {s.prospects_with_email.toLocaleString('en-GB')}
                   </td>
                   <td className="px-3 py-2 text-xs text-neutral-600">{fmtDate(s.started_at ?? s.created_at)}</td>
+                  <td className="px-3 py-2 text-right">
+                    <DeleteSearchButton
+                      searchId={s.id}
+                      label={s.category_label ?? s.category ?? s.location ?? 'Untitled'}
+                    />
+                  </td>
                 </tr>
               ))}
             </tbody>
