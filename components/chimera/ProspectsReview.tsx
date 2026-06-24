@@ -84,6 +84,38 @@ export function ProspectsReview({
     }
   }
 
+  async function rescanWebsites() {
+    if (selected.size === 0) {
+      setError('Select prospects to rescan first.');
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    setMessage(null);
+    try {
+      const res = await fetch('/api/chimera/prospects/rescan-website', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ prospect_ids: [...selected] }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error ?? `Rescan failed (${res.status})`);
+      const errCount = Array.isArray(data.errors) ? data.errors.length : 0;
+      const firstError = (data.errors as Array<{ reason: string }> | undefined)?.[0]?.reason;
+      setMessage(
+        `Website rescan: tried ${data.prospectsTried} · ${data.emailsAdded} new emails · ${data.prospectsUpdated} prospects updated${errCount > 0 ? ` · ${errCount} errors` : ''}.`,
+      );
+      if (errCount > 0 && firstError) {
+        setError(`First error: ${firstError}`);
+      }
+      router.refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function enrichWithApollo() {
     if (selected.size === 0) {
       setError('Select prospects to enrich first.');
@@ -240,6 +272,15 @@ export function ProspectsReview({
           </select>
         </Field>
         <div className="sm:col-span-3 flex flex-wrap items-end gap-2">
+          <button
+            type="button"
+            onClick={rescanWebsites}
+            disabled={busy || selected.size === 0}
+            className="rounded-md border border-blue-300 bg-white px-3 py-1.5 text-xs font-medium text-blue-700 hover:bg-blue-50 disabled:opacity-50"
+            title="Re-visit each selected prospect's website and extract emails (including obfuscated ones like 'office [at] school.uk')"
+          >
+            Rescan websites ({selected.size})
+          </button>
           <div>
             <label className="block text-[10px] font-medium uppercase tracking-wider text-neutral-500">
               Apollo people per company

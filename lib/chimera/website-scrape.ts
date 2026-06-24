@@ -9,6 +9,18 @@ const JSON_LD_RE = /<script[^>]+type=["']application\/ld\+json["'][^>]*>([\s\S]*
 const ADDRESS_TAG_RE = /<address\b[^>]*>([\s\S]*?)<\/address>/gi;
 const MAILTO_RE = /href=["']mailto:([^"'?]+)/gi;
 
+// Common email-obfuscation patterns schools use to thwart scrapers. Each
+// regex captures the local-part and the domain separately so we can
+// re-assemble a real email address.
+const OBFUSCATED_PATTERNS: RegExp[] = [
+  // 'office [at] school.uk' / 'office (at) school.uk' / 'office {at} school.uk'
+  /([a-zA-Z0-9._%+\-]+)\s*[\[({]\s*at\s*[\])}]\s*([a-zA-Z0-9.\-]+\.[a-zA-Z]{2,})/gi,
+  // 'office AT school.uk' (single word ' at ' with spaces, must be lowercase 'at' between local-part and domain)
+  /([a-zA-Z0-9._%+\-]+)\s+at\s+([a-zA-Z0-9.\-]+\.[a-zA-Z]{2,})/gi,
+  // 'office [at] school [dot] uk' — split @ and one of the dots
+  /([a-zA-Z0-9._%+\-]+)\s*[\[({]\s*at\s*[\])}]\s*([a-zA-Z0-9\-]+)\s*[\[({]\s*dot\s*[\])}]\s*([a-zA-Z]{2,})/gi,
+];
+
 const IGNORE_EMAIL = [
   'example.com', 'domain.com', 'yourdomain', 'sentry', 'wixpress',
   'squarespace', 'wordpress', 'schema.org', 'w3.org', '.png', '.jpg',
@@ -22,7 +34,7 @@ const HEADERS = {
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
 };
 
-const REQUEST_TIMEOUT_MS = 8000;
+const REQUEST_TIMEOUT_MS = 15000;
 
 function normalisePostcode(pc: string): string {
   const stripped = pc.replace(/\s+/g, '').toUpperCase();
@@ -41,28 +53,83 @@ function isValidEmail(email: string): boolean {
   return !IGNORE_EMAIL.some((p) => e.includes(p));
 }
 
-function stripTags(html: string): string {
-  return html
-    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
-    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
-    .replace(/<[^>]+>/g, ' ')
+// Common HTML entities used to obfuscate emails — @ becomes &#64; or
+// &commat;, . becomes &#46; or &period;, and so on. Decode these BEFORE
+// the email regex runs so 'office&#64;school.uk' is detected as
+// 'office@school.uk'.
+function decodeHtmlEntities(s: string): string {
+  return s
     .replace(/&nbsp;/gi, ' ')
     .replace(/&amp;/gi, '&')
+    .replace(/&commat;/gi, '@')
+    .replace(/&period;/gi, '.')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#(\d+);/g, (_, code: string) => {
+      try {
+        return String.fromCodePoint(parseInt(code, 10));
+      } catch {
+        return ' ';
+      }
+    })
+    .replace(/&#x([0-9a-f]+);/gi, (_, code: string) => {
+      try {
+        return String.fromCodePoint(parseInt(code, 16));
+      } catch {
+        return ' ';
+      }
+    });
+}
+
+function stripTags(html: string): string {
+  return decodeHtmlEntities(
+    html
+      .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+      .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+      .replace(/<[^>]+>/g, ' '),
+  )
     .replace(/\s+/g, ' ')
     .trim();
 }
 
+// Reassembles 'office [at] school.uk' / 'office at school dot uk' style
+// strings into a real email and yields each match. Run on the stripped
+// text after the standard regex has already taken its pass.
+function* findObfuscatedEmails(text: string): Iterable<string> {
+  for (const re of OBFUSCATED_PATTERNS) {
+    re.lastIndex = 0;
+    for (const m of text.matchAll(re)) {
+      // Pattern 3 (the dot-split version) has 3 groups: local, domain-stem, tld
+      if (m.length >= 4 && m[3]) {
+        yield `${m[1]}@${m[2]}.${m[3]}`.toLowerCase();
+      } else {
+        yield `${m[1]}@${m[2]}`.toLowerCase();
+      }
+    }
+  }
+}
+
 export function extractEmailsFromHtml(html: string): Set<string> {
   const out = new Set<string>();
+  // 1. mailto: links in the raw HTML — these are the most reliable signal.
   for (const m of html.matchAll(MAILTO_RE)) {
-    const e = m[1].trim().toLowerCase();
-    if (EMAIL_RE.test(e) && isValidEmail(e)) out.add(e);
+    const e = decodeHtmlEntities(m[1]).trim().toLowerCase();
     EMAIL_RE.lastIndex = 0;
+    if (EMAIL_RE.test(e) && isValidEmail(e)) out.add(e);
   }
+  // 2. Raw email regex over the stripped, entity-decoded text. Picks up
+  // emails written plainly OR encoded with &#64; / &commat; / etc, since
+  // stripTags now decodes entities.
   const text = stripTags(html);
   for (const m of text.matchAll(EMAIL_RE)) {
     const e = m[0].toLowerCase().replace(/[.,;:]+$/, '');
     if (isValidEmail(e)) out.add(e);
+  }
+  // 3. Obfuscation patterns: '[at]', '(at)', ' at ', '[dot]'. Run on the
+  // already-decoded text so 'office &#91;at&#93; school.uk' works too.
+  for (const e of findObfuscatedEmails(text)) {
+    if (isValidEmail(e) && /.+@.+\..+/.test(e)) out.add(e);
   }
   return out;
 }
