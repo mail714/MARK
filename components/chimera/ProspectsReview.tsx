@@ -9,6 +9,7 @@ import type {
 } from '@/lib/chimera/types';
 import { normaliseWebsiteUrl } from '@/lib/chimera/website-scrape';
 import { BulkJobProgress } from './BulkJobProgress';
+import { UpdateWebsiteButton } from './UpdateWebsiteButton';
 
 type Brand = { id: string; slug: string; name: string };
 type AddressBook = { dotdigital_id: number; name: string; contact_count: number | null };
@@ -315,6 +316,13 @@ export function ProspectsReview({
                       {p.website}
                     </a>
                   ) : null}
+                  <div className="mt-0.5">
+                    <UpdateWebsiteButton
+                      prospectId={p.id}
+                      currentUrl={p.website}
+                      businessName={p.business_name}
+                    />
+                  </div>
                   {p.company_number || (p.sic_codes && p.sic_codes.length > 0) ? (
                     <div className="mt-0.5 flex flex-wrap items-center gap-1 text-[10px]">
                       {p.company_number ? (

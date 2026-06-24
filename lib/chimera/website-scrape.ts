@@ -491,6 +491,31 @@ export async function scrapeWebsiteForEmailsAndAddress(
     }
   }
 
+  // Last-resort fallback: if direct fetch + nav-following found no emails
+  // at all, the site's contact info is probably in a JavaScript-injected
+  // footer or similar client-rendered element. Render the homepage via
+  // ScrapingBee one more time and try extracting from the rendered HTML.
+  // Only fires when direct fetch was already successful — schools whose
+  // direct fetch failed at the network layer have already been served by
+  // ScrapingBee inside fetchPageWithSource.
+  if (emails.size === 0 && homeResult.source === 'direct' && isScrapingBeeConfigured()) {
+    try {
+      const rendered = await fetchViaScrapingBee(websiteUrl, { renderJs: true });
+      if (rendered && rendered.length > 0) {
+        for (const e of extractEmailsFromHtml(rendered)) emails.add(e);
+        if (!address.postcode) {
+          const a = extractAddressFromHtml(rendered);
+          if (a.postcode) address = a;
+        }
+      }
+    } catch (err) {
+      console.warn(
+        `website-scrape last-resort ScrapingBee fetch failed for ${websiteUrl}:`,
+        err instanceof Error ? err.message : err,
+      );
+    }
+  }
+
   return { emails: [...emails].sort(), address };
 }
 
