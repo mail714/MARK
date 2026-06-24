@@ -264,6 +264,10 @@ export function ProspectsReview({
           onDone={(job) => {
             setBusy(false);
             setCurrentJobId(null);
+            // Clear the selection so the action-bar counter ('156 selected')
+            // doesn't stick around as stale state. The user can re-tick
+            // whatever they want after seeing the fresh post-rescan view.
+            setSelected(new Set());
             setMessage(
               `${job.kind === 'rescan-website' ? 'Website rescan' : job.kind === 'apollo-enrich' ? 'Apollo enrich' : 'dotdigital push'} ${job.status} — ${job.succeeded} succeeded${job.emails_added ? `, +${job.emails_added} emails` : ''}${job.contacts_added ? `, +${job.contacts_added} contacts` : ''}${job.failed ? `, ${job.failed} failed` : ''}.`,
             );

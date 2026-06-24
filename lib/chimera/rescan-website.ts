@@ -114,6 +114,12 @@ async function runWebsiteRescan(jobId: string, prospectIds: string[]): Promise<v
     await Promise.all(workers);
     await flush();
 
+    // Recount the with-email / with-website totals on every chimera_searches
+    // row that contains any of the affected prospects, so the search-header
+    // tiles ('WITH EMAIL: 58') refresh to reflect the rescan. Without this
+    // the tiles keep showing the snapshot from when the original search ran.
+    await recountAffectedSearches(supabase, prospectIds);
+
     await updateBulkJob(jobId, {
       status: 'completed',
       processed,
@@ -130,5 +136,53 @@ async function runWebsiteRescan(jobId: string, prospectIds: string[]): Promise<v
       last_error: message,
       finished_at: new Date().toISOString(),
     });
+  }
+}
+
+// Refresh the cached counters on every search that contains any of the
+// affected prospects. Called at the end of a rescan so the search-header
+// tiles (WITH EMAIL, WITH WEBSITE) match reality instead of showing the
+// snapshot from when the original search completed.
+async function recountAffectedSearches(
+  supabase: ReturnType<typeof createAdminClient>,
+  prospectIds: string[],
+): Promise<void> {
+  if (prospectIds.length === 0) return;
+  const { data: links } = await supabase
+    .from('prospect_searches')
+    .select('search_id')
+    .in('prospect_id', prospectIds);
+  const searchIds = Array.from(
+    new Set(((links ?? []) as { search_id: string }[]).map((l) => l.search_id)),
+  );
+
+  for (const searchId of searchIds) {
+    const { data: allLinks } = await supabase
+      .from('prospect_searches')
+      .select('prospect_id')
+      .eq('search_id', searchId);
+    const ids = ((allLinks ?? []) as { prospect_id: string }[]).map((l) => l.prospect_id);
+    if (ids.length === 0) continue;
+
+    const [{ count: withEmail }, { count: withWebsite }] = await Promise.all([
+      supabase
+        .from('prospects')
+        .select('id', { count: 'exact', head: true })
+        .in('id', ids)
+        .not('emails', 'eq', '{}'),
+      supabase
+        .from('prospects')
+        .select('id', { count: 'exact', head: true })
+        .in('id', ids)
+        .not('website', 'is', null),
+    ]);
+
+    await supabase
+      .from('chimera_searches')
+      .update({
+        prospects_with_email: withEmail ?? 0,
+        prospects_with_website: withWebsite ?? 0,
+      })
+      .eq('id', searchId);
   }
 }
