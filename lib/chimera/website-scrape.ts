@@ -208,6 +208,104 @@ async function fetchPage(url: string): Promise<string | null> {
   }
 }
 
+// Anchor tag with capturing groups for attributes and inner text.
+const A_TAG_RE = /<a\b([^>]*)>([\s\S]*?)<\/a>/gi;
+const HREF_RE = /\bhref=["']([^"']+)["']/i;
+
+// Phrases that suggest a link leads to contact info. Score = the highest
+// matching pattern's weight; scoreLink walks the patterns in order and
+// reports the best hit. Tuned for UK school sites specifically (key info /
+// office / find us are common section labels there).
+const CONTACT_LINK_KEYWORDS: { pattern: RegExp; weight: number }[] = [
+  { pattern: /contact[ _-]?(?:us|the[ _-]?school|the[ _-]?office)?\b/i, weight: 10 },
+  { pattern: /get[ _-]?in[ _-]?touch/i, weight: 9 },
+  { pattern: /reach[ _-]?(?:us|out)/i, weight: 8 },
+  { pattern: /find[ _-]?(?:us|the[ _-]?school)/i, weight: 7 },
+  { pattern: /school[ _-]?office\b/i, weight: 7 },
+  { pattern: /\boffice\b/i, weight: 6 },
+  { pattern: /key[ _-]?info(?:rmation)?/i, weight: 5 },
+  { pattern: /\babout[ _-]?(?:us)?\b/i, weight: 3 },
+];
+
+function scoreLink(href: string, anchorText: string): number {
+  const haystack = `${href} ${anchorText}`.toLowerCase();
+  let score = 0;
+  for (const { pattern, weight } of CONTACT_LINK_KEYWORDS) {
+    if (pattern.test(haystack) && weight > score) score = weight;
+  }
+  return score;
+}
+
+// Walks every <a href> in the homepage HTML and ranks the ones whose URL
+// or anchor text suggests they lead to contact details. Returns the top N
+// candidate URLs (absolute, same-origin, deduped) for the scraper to
+// follow. Falls back gracefully — anything not parseable as a URL gets
+// dropped, external-origin links are skipped, javascript:/mailto:/tel:
+// hrefs are ignored.
+export function findContactLinks(
+  homepageHtml: string,
+  homepageUrl: string,
+  limit = 6,
+): string[] {
+  let origin: string;
+  let homepageNormalised: string;
+  try {
+    const u = new URL(homepageUrl);
+    origin = u.origin;
+    u.hash = '';
+    homepageNormalised = u.toString().replace(/\/$/, '');
+  } catch {
+    return [];
+  }
+
+  const ranked = new Map<string, number>(); // url → max score
+
+  for (const m of homepageHtml.matchAll(A_TAG_RE)) {
+    const attrs = m[1];
+    const inner = m[2];
+    const hrefMatch = attrs.match(HREF_RE);
+    if (!hrefMatch) continue;
+    const rawHref = hrefMatch[1].trim();
+    if (
+      !rawHref ||
+      rawHref.startsWith('#') ||
+      rawHref.toLowerCase().startsWith('javascript:') ||
+      rawHref.toLowerCase().startsWith('mailto:') ||
+      rawHref.toLowerCase().startsWith('tel:')
+    ) {
+      continue;
+    }
+
+    let resolved: URL;
+    try {
+      resolved = new URL(rawHref, homepageUrl);
+    } catch {
+      continue;
+    }
+    if (resolved.origin !== origin) continue;
+    resolved.hash = '';
+    const normalised = resolved.toString().replace(/\/$/, '');
+    if (normalised === homepageNormalised) continue;
+
+    const anchorText = inner
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/&nbsp;/gi, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+
+    const score = scoreLink(rawHref, anchorText);
+    if (score === 0) continue;
+
+    const existing = ranked.get(resolved.toString()) ?? 0;
+    if (score > existing) ranked.set(resolved.toString(), score);
+  }
+
+  return [...ranked.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, limit)
+    .map(([url]) => url);
+}
+
 export type WebsiteEnrichment = {
   emails: string[];
   address: AddressExtract;
@@ -237,10 +335,23 @@ export async function scrapeWebsiteForEmailsAndAddress(
     }
   }
 
-  // Contact pages, early-exit when both emails and a postcode are found
-  for (const path of CONTACT_PATHS) {
+  // Pull candidate contact-page URLs out of the homepage's actual
+  // navigation rather than guessing from a hardcoded list. Falls back to
+  // the hardcoded list if there's no homepage HTML to parse or no
+  // contact-y links were found in it.
+  const seen = new Set<string>();
+  let candidates: string[] = [];
+  if (home) {
+    candidates = findContactLinks(home, websiteUrl);
+  }
+  if (candidates.length === 0) {
+    candidates = CONTACT_PATHS.map((p) => `${origin}${p}`);
+  }
+
+  for (const url of candidates) {
     if (emails.size > 0 && address.postcode) break;
-    const url = `${origin}${path}`;
+    if (seen.has(url)) continue;
+    seen.add(url);
     const html = await fetchPage(url);
     if (!html) continue;
     if (emails.size === 0) {
