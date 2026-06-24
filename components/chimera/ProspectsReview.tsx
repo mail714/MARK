@@ -29,6 +29,7 @@ export function ProspectsReview({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
+  const [apolloPerPage, setApolloPerPage] = useState(2);
   const [pushBookId, setPushBookId] = useState<number | null>(addressBooks[0]?.dotdigital_id ?? null);
   const [filter, setFilter] = useState<'all' | 'with-email' | 'no-email'>('all');
 
@@ -75,6 +76,37 @@ export function ProspectsReview({
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error ?? `Assign failed (${res.status})`);
       setMessage(`Assigned ${data.count} prospect${data.count === 1 ? '' : 's'} to ${brands.find((b) => b.id === brandId)?.name}.`);
+      router.refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function enrichWithApollo() {
+    if (selected.size === 0) {
+      setError('Select prospects to enrich first.');
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    setMessage(null);
+    try {
+      const res = await fetch('/api/chimera/prospects/enrich-apollo', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          prospect_ids: [...selected],
+          per_page: apolloPerPage,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error ?? `Enrich failed (${res.status})`);
+      const errCount = Array.isArray(data.errors) ? data.errors.length : 0;
+      setMessage(
+        `Apollo: tried ${data.prospectsTried} · ${data.contactsAdded} contacts found · ${data.emailsAdded} new emails${errCount > 0 ? ` · ${errCount} errors` : ''}.`,
+      );
       router.refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -200,7 +232,32 @@ export function ProspectsReview({
             ))}
           </select>
         </Field>
-        <div className="sm:col-span-3 flex items-end gap-2">
+        <div className="sm:col-span-3 flex flex-wrap items-end gap-2">
+          <div>
+            <label className="block text-[10px] font-medium uppercase tracking-wider text-neutral-500">
+              Apollo per prospect
+            </label>
+            <select
+              value={apolloPerPage}
+              onChange={(e) => setApolloPerPage(parseInt(e.target.value, 10) || 2)}
+              className="mt-1 w-24 rounded-md border border-neutral-200 bg-white px-2 py-1.5 text-xs"
+              title="How many contacts to look up per company. Apollo charges 1 credit per contact returned."
+            >
+              <option value={1}>1 contact</option>
+              <option value={2}>2 contacts</option>
+              <option value={3}>3 contacts</option>
+              <option value={5}>5 contacts</option>
+            </select>
+          </div>
+          <button
+            type="button"
+            onClick={enrichWithApollo}
+            disabled={busy || selected.size === 0}
+            className="rounded-md border border-violet-300 bg-white px-3 py-1.5 text-xs font-medium text-violet-700 hover:bg-violet-50 disabled:opacity-50"
+            title={`~${selected.size * apolloPerPage} Apollo credits for ${selected.size} prospects`}
+          >
+            Enrich with Apollo (~{selected.size * apolloPerPage} credits)
+          </button>
           <button
             type="button"
             onClick={pushToBook}
@@ -285,10 +342,33 @@ export function ProspectsReview({
                 </td>
                 <td className="px-3 py-2 text-xs text-neutral-600">{p.phone ?? '—'}</td>
                 <td className="px-3 py-2 text-xs text-neutral-700">
-                  {p.emails.length === 0 ? <span className="text-neutral-400">—</span> : null}
-                  {p.emails.map((e) => (
-                    <div key={e} className="truncate font-mono text-[11px]">{e}</div>
-                  ))}
+                  {p.emails.length === 0 && (p.apollo_contacts ?? []).length === 0 ? (
+                    <span className="text-neutral-400">—</span>
+                  ) : null}
+                  {p.emails.map((e) => {
+                    const contact = (p.apollo_contacts ?? []).find((c) => c.email === e);
+                    return (
+                      <div key={e} className="leading-tight">
+                        <div className="truncate font-mono text-[11px]">{e}</div>
+                        {contact ? (
+                          <div className="truncate text-[10px] text-violet-700">
+                            {contact.name}
+                            {contact.title ? <span className="text-neutral-500"> · {contact.title}</span> : null}
+                          </div>
+                        ) : null}
+                      </div>
+                    );
+                  })}
+                  {(p.apollo_contacts ?? [])
+                    .filter((c) => !c.email && c.name)
+                    .map((c, i) => (
+                      <div key={`no-email-${i}`} className="truncate text-[10px] text-neutral-500">
+                        {c.name} {c.title ? `· ${c.title}` : ''} <span className="text-amber-700">(no email on plan)</span>
+                      </div>
+                    ))}
+                  {p.apollo_enriched_at ? (
+                    <div className="mt-0.5 text-[9px] text-violet-500">Apollo enriched</div>
+                  ) : null}
                 </td>
                 <td className="px-3 py-2 text-xs">
                   {p.assignments.length === 0 ? (
