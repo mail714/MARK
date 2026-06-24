@@ -3,6 +3,12 @@
 // falls back to <address> tags and bare postcode regex. Early-exit on the
 // first useful hit.
 
+import {
+  fetchViaScrapingBee,
+  isScrapingBeeConfigured,
+  ScrapingBeeError,
+} from '@/lib/scrapingbee/client';
+
 const EMAIL_RE = /[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}/g;
 const POSTCODE_RE = /\b([A-Z]{1,2}\d{1,2}[A-Z]?\s?\d[A-Z]{2})\b/gi;
 const JSON_LD_RE = /<script[^>]+type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi;
@@ -191,7 +197,29 @@ export function extractAddressFromHtml(html: string): AddressExtract {
   return { street: null, city: null, postcode: pc };
 }
 
-async function fetchPage(url: string): Promise<string | null> {
+export type FetchSource = 'direct' | 'scrapingbee' | 'failed';
+
+export type FetchPageResult = {
+  html: string | null;
+  source: FetchSource;
+  directError: string | null;
+  scrapingBeeError: string | null;
+};
+
+// Tries a direct fetch first (fast, free). If that fails — network error,
+// 4xx, or empty body — falls back to ScrapingBee when SCRAPINGBEE_API_KEY
+// is set. ScrapingBee uses a real Chromium on residential IPs so it gets
+// past both the IP-blocking and JS-rendering problems that small UK hosts
+// commonly throw up.
+export async function fetchPageWithSource(url: string): Promise<FetchPageResult> {
+  const result: FetchPageResult = {
+    html: null,
+    source: 'failed',
+    directError: null,
+    scrapingBeeError: null,
+  };
+
+  // 1. Direct attempt
   try {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
@@ -201,12 +229,18 @@ async function fetchPage(url: string): Promise<string | null> {
       redirect: 'follow',
     });
     clearTimeout(timer);
-    if (!res.ok) return null;
-    return await res.text();
+    if (res.ok) {
+      const text = await res.text();
+      if (text.length > 0) {
+        result.html = text;
+        result.source = 'direct';
+        return result;
+      }
+      result.directError = 'empty body';
+    } else {
+      result.directError = `HTTP ${res.status}`;
+    }
   } catch (err) {
-    // Surface the underlying cause to Render logs — fetch failures are
-    // often DNS/TLS/refused at the network layer, which we'd otherwise
-    // silently swallow as 'no email found'.
     const cause = err instanceof Error ? (err as { cause?: unknown }).cause : null;
     const causeBits: string[] = [];
     if (cause && typeof cause === 'object') {
@@ -215,13 +249,41 @@ async function fetchPage(url: string): Promise<string | null> {
       if (c.errno) causeBits.push(`errno=${c.errno}`);
       if (c.message) causeBits.push(c.message);
     }
-    console.warn(
-      `website-scrape fetch failed for ${url}:`,
-      err instanceof Error ? err.message : err,
-      causeBits.length > 0 ? `(${causeBits.join(', ')})` : '',
-    );
-    return null;
+    result.directError = [
+      err instanceof Error ? err.message : String(err),
+      ...causeBits,
+    ].join(' · ');
   }
+
+  // 2. ScrapingBee fallback
+  if (isScrapingBeeConfigured()) {
+    try {
+      const html = await fetchViaScrapingBee(url, { renderJs: true });
+      if (html && html.length > 0) {
+        result.html = html;
+        result.source = 'scrapingbee';
+        return result;
+      }
+      result.scrapingBeeError = 'empty body';
+    } catch (err) {
+      result.scrapingBeeError =
+        err instanceof ScrapingBeeError
+          ? `${err.statusCode}: ${err.message}`
+          : err instanceof Error
+            ? err.message
+            : String(err);
+    }
+  }
+
+  // 3. Log failures so we can spot patterns in Render logs.
+  console.warn(
+    `website-scrape failed for ${url}: direct=${result.directError ?? '—'} scrapingbee=${result.scrapingBeeError ?? '—'}`,
+  );
+  return result;
+}
+
+async function fetchPage(url: string): Promise<string | null> {
+  return (await fetchPageWithSource(url)).html;
 }
 
 // Anchor tag with capturing groups for attributes and inner text.

@@ -1,34 +1,29 @@
 import {
   extractAddressFromHtml,
   extractEmailsFromHtml,
+  fetchPageWithSource,
   findContactLinks,
+  type FetchSource,
 } from './website-scrape';
-
-const REQUEST_TIMEOUT_MS = 15000;
-
-// Browser-ish User-Agent. If a site is serving different content based on
-// UA (e.g. Cloudflare bot challenge), we'll get a clearer picture by
-// looking like a real Chrome rather than the production scraper's UA.
-const UA_BROWSER =
-  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
+import { isScrapingBeeConfigured } from '@/lib/scrapingbee/client';
 
 export type DebugFetchResult = {
   url: string;
-  finalUrl: string | null;
-  status: number | null;
-  contentType: string | null;
+  source: FetchSource;
   htmlBytes: number | null;
   htmlSnippet: string;
   emailsFound: string[];
   postcodeFound: string | null;
   expectedEmailInHtml: boolean | null;
   expectedEmailObfuscatedInHtml: boolean | null;
-  error: string | null;
+  directError: string | null;
+  scrapingBeeError: string | null;
 };
 
 export type DebugScrapeResult = {
   websiteUrl: string;
   expectedEmail: string | null;
+  scrapingBeeAvailable: boolean;
   homepage: DebugFetchResult;
   contactCandidates: string[];
   contactPagesTried: DebugFetchResult[];
@@ -39,34 +34,24 @@ export type DebugScrapeResult = {
 async function fetchDebug(url: string, expected: string | null): Promise<DebugFetchResult> {
   const result: DebugFetchResult = {
     url,
-    finalUrl: null,
-    status: null,
-    contentType: null,
+    source: 'failed',
     htmlBytes: null,
     htmlSnippet: '',
     emailsFound: [],
     postcodeFound: null,
     expectedEmailInHtml: expected ? false : null,
     expectedEmailObfuscatedInHtml: expected ? false : null,
-    error: null,
+    directError: null,
+    scrapingBeeError: null,
   };
-  try {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
-    const res = await fetch(url, {
-      headers: { 'User-Agent': UA_BROWSER },
-      signal: controller.signal,
-      redirect: 'follow',
-    });
-    clearTimeout(timer);
-    result.status = res.status;
-    result.finalUrl = res.url;
-    result.contentType = res.headers.get('content-type');
-    if (!res.ok) {
-      result.error = `HTTP ${res.status}`;
-      return result;
-    }
-    const html = await res.text();
+  // Use the shared fetcher so the diagnostic exercises exactly what
+  // production uses — direct first, ScrapingBee fallback on failure.
+  const fetched = await fetchPageWithSource(url);
+  result.source = fetched.source;
+  result.directError = fetched.directError;
+  result.scrapingBeeError = fetched.scrapingBeeError;
+  if (fetched.html) {
+    const html = fetched.html;
     result.htmlBytes = html.length;
     result.htmlSnippet = html.slice(0, 500);
     result.emailsFound = [...extractEmailsFromHtml(html)];
@@ -90,29 +75,8 @@ async function fetchDebug(url: string, expected: string | null): Promise<DebugFe
         haystack.includes(p),
       );
     }
-  } catch (err) {
-    result.error = describeFetchError(err);
   }
   return result;
-}
-
-// Node's fetch wraps every network failure as 'fetch failed' — the real
-// reason lives in err.cause. Unpack a few common shapes (DNS, TLS, conn
-// refused, undici errors) so the diagnostic page shows ENOTFOUND vs
-// CERT_HAS_EXPIRED vs ECONNREFUSED rather than just 'fetch failed'.
-function describeFetchError(err: unknown): string {
-  if (!(err instanceof Error)) return String(err);
-  const parts = [err.message];
-  const cause = (err as { cause?: unknown }).cause;
-  if (cause && typeof cause === 'object') {
-    const c = cause as { message?: string; code?: string; errno?: number; reason?: string };
-    if (c.code) parts.push(`code=${c.code}`);
-    if (c.errno) parts.push(`errno=${c.errno}`);
-    if (c.message) parts.push(c.message);
-    if (c.reason) parts.push(`reason=${c.reason}`);
-  }
-  if (err.name && err.name !== 'Error') parts.push(`name=${err.name}`);
-  return parts.filter(Boolean).join(' · ');
 }
 
 export async function debugScrape(args: {
@@ -122,6 +86,7 @@ export async function debugScrape(args: {
   const result: DebugScrapeResult = {
     websiteUrl: args.websiteUrl,
     expectedEmail: args.expectedEmail ?? null,
+    scrapingBeeAvailable: isScrapingBeeConfigured(),
     homepage: {} as DebugFetchResult,
     contactCandidates: [],
     contactPagesTried: [],
@@ -129,29 +94,31 @@ export async function debugScrape(args: {
     finalPostcode: null,
   };
 
-  // Homepage
+  // Homepage — runs through the shared fetcher (direct → ScrapingBee).
   result.homepage = await fetchDebug(args.websiteUrl, args.expectedEmail ?? null);
 
   const allEmails = new Set(result.homepage.emailsFound);
   let postcode = result.homepage.postcodeFound;
 
-  // Parse nav for contact links, fall back to hardcoded list if none.
+  // Parse nav for contact links. The homepage HTML is already in
+  // result.homepage but we don't keep the full body, just the snippet —
+  // re-fetch via the shared fetcher so the candidates come from whichever
+  // path actually succeeded.
   if (result.homepage.htmlBytes && result.homepage.htmlBytes > 0) {
-    try {
-      const res = await fetch(args.websiteUrl, {
-        headers: { 'User-Agent': UA_BROWSER },
-      });
-      const html = await res.text();
-      result.contactCandidates = findContactLinks(html, args.websiteUrl);
-    } catch {
-      result.contactCandidates = [];
+    const re = await fetchPageWithSource(args.websiteUrl);
+    if (re.html) {
+      result.contactCandidates = findContactLinks(re.html, args.websiteUrl);
     }
   }
   if (result.contactCandidates.length === 0) {
-    const origin = new URL(args.websiteUrl).origin;
-    result.contactCandidates = ['/contact', '/contact-us', '/about', '/find-us'].map(
-      (p) => `${origin}${p}`,
-    );
+    try {
+      const origin = new URL(args.websiteUrl).origin;
+      result.contactCandidates = ['/contact', '/contact-us', '/about', '/find-us'].map(
+        (p) => `${origin}${p}`,
+      );
+    } catch {
+      // unparseable URL — leave candidates empty
+    }
   }
 
   for (const url of result.contactCandidates.slice(0, 6)) {

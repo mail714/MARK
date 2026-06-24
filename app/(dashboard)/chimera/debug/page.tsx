@@ -5,21 +5,21 @@ import { useState } from 'react';
 
 type DebugFetchResult = {
   url: string;
-  finalUrl: string | null;
-  status: number | null;
-  contentType: string | null;
+  source: 'direct' | 'scrapingbee' | 'failed';
   htmlBytes: number | null;
   htmlSnippet: string;
   emailsFound: string[];
   postcodeFound: string | null;
   expectedEmailInHtml: boolean | null;
   expectedEmailObfuscatedInHtml: boolean | null;
-  error: string | null;
+  directError: string | null;
+  scrapingBeeError: string | null;
 };
 
 type DebugScrapeResult = {
   websiteUrl: string;
   expectedEmail: string | null;
+  scrapingBeeAvailable: boolean;
   homepage: DebugFetchResult;
   contactCandidates: string[];
   contactPagesTried: DebugFetchResult[];
@@ -141,15 +141,29 @@ export default function ChimeraDebugPage() {
 
 function DiagSummary({ result }: { result: DebugScrapeResult }) {
   const homepageVerdict = result.expectedEmail
-    ? result.homepage.expectedEmailInHtml
-      ? '✓ Present in homepage raw source'
-      : result.homepage.expectedEmailObfuscatedInHtml
-        ? '↩ Present obfuscated in homepage source'
-        : '✗ NOT in homepage raw source (likely JavaScript-rendered)'
+    ? result.homepage.source === 'failed'
+      ? '? Couldn\'t fetch the homepage — see error below'
+      : result.homepage.expectedEmailInHtml
+        ? '✓ Present in fetched HTML'
+        : result.homepage.expectedEmailObfuscatedInHtml
+          ? '↩ Present obfuscated in fetched HTML'
+          : '✗ NOT in fetched HTML (likely JavaScript-rendered or wrong page)'
     : null;
   return (
     <div className="space-y-2 rounded-lg border border-neutral-200 bg-white p-5">
-      <div className="text-sm font-semibold">Summary</div>
+      <div className="flex items-center justify-between gap-3">
+        <div className="text-sm font-semibold">Summary</div>
+        <div className="text-[10px] text-neutral-500">
+          ScrapingBee fallback:{' '}
+          {result.scrapingBeeAvailable ? (
+            <span className="text-emerald-700">configured</span>
+          ) : (
+            <span className="text-neutral-500">
+              not configured (set SCRAPINGBEE_API_KEY)
+            </span>
+          )}
+        </div>
+      </div>
       <ul className="space-y-1 text-xs text-neutral-700">
         <li>
           <strong>Final emails found:</strong>{' '}
@@ -157,6 +171,10 @@ function DiagSummary({ result }: { result: DebugScrapeResult }) {
         </li>
         <li>
           <strong>Final postcode:</strong> {result.finalPostcode ?? '(none)'}
+        </li>
+        <li>
+          <strong>Homepage delivered by:</strong>{' '}
+          <SourcePill source={result.homepage.source} />
         </li>
         {result.expectedEmail ? (
           <li>
@@ -179,6 +197,22 @@ function DiagSummary({ result }: { result: DebugScrapeResult }) {
   );
 }
 
+function SourcePill({ source }: { source: 'direct' | 'scrapingbee' | 'failed' }) {
+  const tone =
+    source === 'direct'
+      ? 'bg-emerald-100 text-emerald-800 ring-emerald-200'
+      : source === 'scrapingbee'
+        ? 'bg-violet-100 text-violet-800 ring-violet-200'
+        : 'bg-red-100 text-red-800 ring-red-200';
+  return (
+    <span
+      className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-medium ring-1 ${tone}`}
+    >
+      {source}
+    </span>
+  );
+}
+
 function DiagPageCard({
   label,
   page,
@@ -191,19 +225,25 @@ function DiagPageCard({
   return (
     <div className="space-y-2 rounded-lg border border-neutral-200 bg-white p-4 text-xs">
       <div className="flex items-center justify-between gap-2">
-        <div className="text-sm font-semibold">{label}</div>
+        <div className="flex items-center gap-2">
+          <div className="text-sm font-semibold">{label}</div>
+          <SourcePill source={page.source} />
+        </div>
         <div className="text-[10px] text-neutral-500">
-          HTTP {page.status ?? '—'} · {page.htmlBytes?.toLocaleString('en-GB') ?? '—'} bytes
-          {page.contentType ? ` · ${page.contentType.split(';')[0]}` : ''}
+          {page.htmlBytes?.toLocaleString('en-GB') ?? '—'} bytes
         </div>
       </div>
-      <div className="break-all text-[10px] text-neutral-500">
-        {page.url}
-        {page.finalUrl && page.finalUrl !== page.url ? (
-          <> → <span className="text-neutral-700">{page.finalUrl}</span></>
-        ) : null}
-      </div>
-      {page.error ? <div className="text-red-700">Error: {page.error}</div> : null}
+      <div className="break-all text-[10px] text-neutral-500">{page.url}</div>
+      {page.directError ? (
+        <div className="text-red-700">
+          Direct fetch: {page.directError}
+        </div>
+      ) : null}
+      {page.scrapingBeeError ? (
+        <div className="text-red-700">
+          ScrapingBee fallback: {page.scrapingBeeError}
+        </div>
+      ) : null}
       <div>
         <strong>Emails found:</strong>{' '}
         {page.emailsFound.length === 0 ? '(none)' : page.emailsFound.join(', ')}

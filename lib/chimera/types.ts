@@ -52,15 +52,6 @@ export type Prospect = {
   raw: Record<string, unknown> | null;
   sic_codes: string[];
   company_number: string | null;
-  apollo_contacts: Array<{
-    name: string;
-    title: string | null;
-    email: string | null;
-    phone: string | null;
-    linkedin_url: string | null;
-    email_status: string | null;
-  }>;
-  apollo_enriched_at: string | null;
   is_chain: boolean;
   chain_reason: string | null;
   first_found_at: string;
