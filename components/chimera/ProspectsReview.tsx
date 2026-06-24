@@ -87,6 +87,34 @@ export function ProspectsReview({
     }
   }
 
+  async function repairWebsites() {
+    if (selected.size === 0) {
+      setError('Select prospects to repair first.');
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    setMessage(null);
+    try {
+      const res = await fetch('/api/chimera/prospects/repair-websites', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ prospect_ids: [...selected] }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error ?? `Repair failed (${res.status})`);
+      if (data.job_id) {
+        setCurrentJobId(data.job_id as string);
+      } else {
+        setMessage('Repair started.');
+        setBusy(false);
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+      setBusy(false);
+    }
+  }
+
   async function rescanWebsites() {
     if (selected.size === 0) {
       setError('Select prospects to rescan first.');
@@ -248,6 +276,15 @@ export function ProspectsReview({
           </button>
           <button
             type="button"
+            onClick={repairWebsites}
+            disabled={busy || selected.size === 0}
+            className="rounded-md border border-emerald-300 bg-white px-3 py-1.5 text-xs font-medium text-emerald-700 hover:bg-emerald-50 disabled:opacity-50"
+            title="Look each prospect up on Google Places by name + postcode and auto-update the website URL when phone or postcode matches. Lower-confidence matches are left for the operator to review via Update Website."
+          >
+            Repair websites ({selected.size})
+          </button>
+          <button
+            type="button"
             onClick={pushToBook}
             disabled={busy || selected.size === 0 || !pushBookId}
             className="rounded-md bg-neutral-900 px-3 py-1.5 text-xs font-medium text-white hover:bg-neutral-700 disabled:opacity-50"
@@ -269,8 +306,24 @@ export function ProspectsReview({
             // doesn't stick around as stale state. The user can re-tick
             // whatever they want after seeing the fresh post-rescan view.
             setSelected(new Set());
+            const kindLabel =
+              job.kind === 'rescan-website'
+                ? 'Website rescan'
+                : job.kind === 'apollo-enrich'
+                  ? 'Apollo enrich'
+                  : job.kind === 'repair-websites'
+                    ? 'Website repair'
+                    : 'dotdigital push';
+            const meta = job.metadata as
+              | { suggestions?: number; no_match?: number }
+              | null
+              | undefined;
+            const extra =
+              job.kind === 'repair-websites'
+                ? `${meta?.suggestions ? `, ${meta.suggestions} lower-confidence suggestions to review` : ''}${meta?.no_match ? `, ${meta.no_match} no match` : ''}`
+                : '';
             setMessage(
-              `${job.kind === 'rescan-website' ? 'Website rescan' : job.kind === 'apollo-enrich' ? 'Apollo enrich' : 'dotdigital push'} ${job.status} — ${job.succeeded} succeeded${job.emails_added ? `, +${job.emails_added} emails` : ''}${job.contacts_added ? `, +${job.contacts_added} contacts` : ''}${job.failed ? `, ${job.failed} failed` : ''}.`,
+              `${kindLabel} ${job.status} — ${job.succeeded} ${job.kind === 'repair-websites' ? 'auto-updated' : 'succeeded'}${job.emails_added ? `, +${job.emails_added} emails` : ''}${job.contacts_added ? `, +${job.contacts_added} contacts` : ''}${extra}${job.failed ? `, ${job.failed} failed` : ''}.`,
             );
           }}
         />

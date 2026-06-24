@@ -8,6 +8,7 @@ const KIND_LABEL: Record<string, string> = {
   'rescan-website': 'Rescanning websites',
   'apollo-enrich': 'Enriching with Apollo',
   'push-to-dotdigital': 'Pushing to dotdigital',
+  'repair-websites': 'Repairing websites',
 };
 
 function elapsedSeconds(startedAt: string): number {

@@ -1,6 +1,10 @@
 import { createAdminClient } from '@/lib/supabase/admin';
 
-export type BulkJobKind = 'rescan-website' | 'apollo-enrich' | 'push-to-dotdigital';
+export type BulkJobKind =
+  | 'rescan-website'
+  | 'apollo-enrich'
+  | 'push-to-dotdigital'
+  | 'repair-websites';
 export type BulkJobStatus = 'running' | 'completed' | 'failed';
 
 export type BulkJob = {
