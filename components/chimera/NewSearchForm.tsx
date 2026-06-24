@@ -80,6 +80,14 @@ export function NewSearchForm() {
         apply_chain_filter: applyChainFilter,
         pull_companies_house: pullCompaniesHouse,
       };
+    } else if (category && category.mode === 'gov-uk-schools') {
+      payload = {
+        location: location.trim(),
+        search_mode: 'gov-uk-schools',
+        category: category.phase,
+        category_label: category.label,
+        max_results: maxResults,
+      };
     } else if (category && category.mode === 'grid') {
       const cat = category.type ?? category.keyword ?? category.label;
       payload = {
@@ -147,6 +155,11 @@ export function NewSearchForm() {
           </optgroup>
           <optgroup label="Estate sweep (two-stage)">
             {PLACE_CATEGORIES.filter((c) => c.mode === 'estate-sweep').map((c) => (
+              <option key={c.key} value={c.key}>{c.label}</option>
+            ))}
+          </optgroup>
+          <optgroup label="Schools register (gov.uk)">
+            {PLACE_CATEGORIES.filter((c) => c.mode === 'gov-uk-schools').map((c) => (
               <option key={c.key} value={c.key}>{c.label}</option>
             ))}
           </optgroup>

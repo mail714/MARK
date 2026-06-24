@@ -1,6 +1,6 @@
 export type ChimeraSearchStatus = 'pending' | 'running' | 'completed' | 'failed';
-export type ChimeraSource = 'google-places' | 'csv-import';
-export type ChimeraSearchMode = 'grid' | 'estate-sweep';
+export type ChimeraSource = 'google-places' | 'csv-import' | 'gov-uk-schools';
+export type ChimeraSearchMode = 'grid' | 'estate-sweep' | 'gov-uk-schools';
 
 export type ChimeraSearch = {
   id: string;

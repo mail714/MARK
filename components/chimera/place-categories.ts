@@ -26,6 +26,13 @@ export type ChimeraCategory =
       sweepSeeds: string[];         // text-search phrases for Stage 1
       sweepRadiusM: number;         // radius around each found estate for Stage 2
       defaultChainFilter: boolean;
+    }
+  | {
+      key: string;
+      label: string;
+      mode: 'gov-uk-schools';
+      phase: string | null;         // GIAS phase filter ('Primary', 'Secondary', null = all)
+      defaultChainFilter: boolean;
     };
 
 export const PLACE_CATEGORIES: ChimeraCategory[] = [
@@ -72,6 +79,38 @@ export const PLACE_CATEGORIES: ChimeraCategory[] = [
     mode: 'estate-sweep',
     sweepSeeds: ['trade centre', 'wholesale park', 'trade park'],
     sweepRadiusM: 300,
+    defaultChainFilter: false,
+  },
+
+  // New: gov.uk Schools register — local copy of GIAS, no Google Places calls.
+  // Far richer school data (head teacher, pupil count, phase, religious
+  // character, LA) and free to query once the register's been synced.
+  {
+    key: 'schools-gov-uk-all',
+    label: 'Schools — all phases (gov.uk)',
+    mode: 'gov-uk-schools',
+    phase: null,
+    defaultChainFilter: false,
+  },
+  {
+    key: 'schools-gov-uk-primary',
+    label: 'Schools — primary only (gov.uk)',
+    mode: 'gov-uk-schools',
+    phase: 'Primary',
+    defaultChainFilter: false,
+  },
+  {
+    key: 'schools-gov-uk-secondary',
+    label: 'Schools — secondary only (gov.uk)',
+    mode: 'gov-uk-schools',
+    phase: 'Secondary',
+    defaultChainFilter: false,
+  },
+  {
+    key: 'schools-gov-uk-all-through',
+    label: 'Schools — all-through (gov.uk)',
+    mode: 'gov-uk-schools',
+    phase: 'All-through',
     defaultChainFilter: false,
   },
 

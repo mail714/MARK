@@ -4,6 +4,7 @@ import {
   runEstateSweepSearch,
   runGooglePlacesSearch,
 } from '@/lib/chimera/search-orchestrator';
+import { runGovUkSchoolsSearch } from '@/lib/chimera/sources/gov-uk-schools';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -18,7 +19,12 @@ export async function POST(req: Request) {
   }
 
   const location = typeof body.location === 'string' ? body.location.trim() : '';
-  const mode = body.search_mode === 'estate-sweep' ? 'estate-sweep' : 'grid';
+  const mode =
+    body.search_mode === 'estate-sweep'
+      ? 'estate-sweep'
+      : body.search_mode === 'gov-uk-schools'
+        ? 'gov-uk-schools'
+        : 'grid';
   const categoryLabel =
     typeof body.category_label === 'string' ? body.category_label.trim() : '';
 
@@ -30,6 +36,26 @@ export async function POST(req: Request) {
   }
 
   try {
+    if (mode === 'gov-uk-schools') {
+      const phase = typeof body.category === 'string' && body.category.trim() ? body.category.trim() : null;
+      const id = await createSearch({
+        source: 'gov-uk-schools',
+        search_mode: 'gov-uk-schools',
+        location,
+        category: phase,
+        category_label: categoryLabel,
+        max_results: clampInt(body.max_results, 10, 5000, 500),
+        apply_chain_filter: false,
+        notes: typeof body.notes === 'string' ? body.notes : null,
+      });
+      setImmediate(() => {
+        runGovUkSchoolsSearch(id).catch((err) => {
+          console.error('chimera schools search failed', id, err);
+        });
+      });
+      return NextResponse.json({ ok: true, id });
+    }
+
     if (mode === 'estate-sweep') {
       const seeds = Array.isArray(body.sweep_seeds)
         ? (body.sweep_seeds as unknown[]).filter((s): s is string => typeof s === 'string' && s.trim().length > 0)

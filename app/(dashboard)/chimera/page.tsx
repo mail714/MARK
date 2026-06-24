@@ -38,6 +38,12 @@ export default async function ChimeraPage() {
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <Link
+            href="/chimera/sources"
+            className="rounded-md border border-neutral-300 bg-white px-3 py-1.5 text-xs font-medium text-neutral-700 hover:bg-neutral-50"
+          >
+            Sources
+          </Link>
+          <Link
             href="/chimera/prospects"
             className="rounded-md border border-neutral-300 bg-white px-3 py-1.5 text-xs font-medium text-neutral-700 hover:bg-neutral-50"
           >
