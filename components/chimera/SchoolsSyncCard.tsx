@@ -1,7 +1,7 @@
 'use client';
 
+import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { useState } from 'react';
 
 type Status = {
   totalSchools: number;
@@ -25,28 +25,54 @@ function fmtDate(iso: string | null): string {
 export function SchoolsSyncCard({ initial }: { initial: Status }) {
   const router = useRouter();
   const [status, setStatus] = useState<Status>(initial);
-  const [busy, setBusy] = useState(false);
+  const [busy, setBusy] = useState(initial.lastSyncStatus === 'running');
   const [csvText, setCsvText] = useState('');
   const [showManual, setShowManual] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
+  const lastTotal = useRef<number>(initial.totalSchools);
 
-  async function refreshStatus() {
-    try {
-      const res = await fetch('/api/chimera/sources/schools/status', { cache: 'no-store' });
-      if (res.ok) {
+  // Poll status while a sync is running so the UI reflects progress live.
+  useEffect(() => {
+    if (status.lastSyncStatus !== 'running') return;
+    let cancelled = false;
+    const tick = async () => {
+      try {
+        const res = await fetch('/api/chimera/sources/schools/status', { cache: 'no-store' });
+        if (!res.ok) return;
         const data = (await res.json()) as { status: Status };
+        if (cancelled) return;
         setStatus(data.status);
+        if (data.status.lastSyncStatus !== 'running') {
+          setBusy(false);
+          if (data.status.lastSyncStatus === 'completed') {
+            const added = data.status.totalSchools - lastTotal.current;
+            setMessage(
+              added > 0
+                ? `Sync complete — ${data.status.totalSchools.toLocaleString('en-GB')} schools (added/updated ${added.toLocaleString('en-GB')}).`
+                : `Sync complete — ${data.status.totalSchools.toLocaleString('en-GB')} schools.`,
+            );
+            router.refresh();
+          } else if (data.status.lastSyncStatus === 'failed') {
+            setError(data.status.lastError ?? 'Sync failed.');
+          }
+        }
+      } catch {
+        // swallow — next tick retries
       }
-    } catch {
-      // ignore
-    }
-  }
+    };
+    const handle = setInterval(tick, 3000);
+    return () => {
+      cancelled = true;
+      clearInterval(handle);
+    };
+  }, [status.lastSyncStatus, router]);
 
-  async function sync(csv?: string) {
+  async function kickOff(csv?: string) {
     setBusy(true);
     setError(null);
     setMessage(null);
+    lastTotal.current = status.totalSchools;
     try {
       const res = await fetch('/api/chimera/sources/schools/sync', {
         method: 'POST',
@@ -55,12 +81,10 @@ export function SchoolsSyncCard({ initial }: { initial: Status }) {
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error ?? `Sync failed (${res.status})`);
-      setMessage(`Synced ${data.records?.toLocaleString('en-GB') ?? '?'} records.`);
-      await refreshStatus();
-      router.refresh();
+      // Flip the local status into 'running' so the poller takes over.
+      setStatus((s) => ({ ...s, lastSyncStatus: 'running', lastError: null }));
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
-    } finally {
       setBusy(false);
     }
   }
@@ -84,7 +108,7 @@ export function SchoolsSyncCard({ initial }: { initial: Status }) {
         </div>
         <button
           type="button"
-          onClick={() => sync()}
+          onClick={() => kickOff()}
           disabled={busy}
           className="rounded-md bg-neutral-900 px-3 py-1.5 text-xs font-medium text-white hover:bg-neutral-700 disabled:opacity-50"
         >
@@ -98,7 +122,12 @@ export function SchoolsSyncCard({ initial }: { initial: Status }) {
         <Tile label="Last sync" value={fmtDate(status.lastSyncAt)} small />
       </div>
 
-      {status.lastSyncStatus === 'failed' && status.lastError ? (
+      {busy ? (
+        <div className="mt-3 rounded-md bg-blue-50 px-3 py-2 text-xs text-blue-800">
+          Sync running in the background — page can be left and the status will update when complete.
+        </div>
+      ) : null}
+      {status.lastSyncStatus === 'failed' && status.lastError && !busy ? (
         <div className="mt-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-800">
           Last sync failed: {status.lastError}
         </div>
@@ -137,7 +166,7 @@ export function SchoolsSyncCard({ initial }: { initial: Status }) {
             />
             <button
               type="button"
-              onClick={() => sync(csvText)}
+              onClick={() => kickOff(csvText)}
               disabled={busy || !csvText}
               className="rounded-md border border-neutral-300 bg-white px-3 py-1.5 text-xs font-medium text-neutral-700 hover:bg-neutral-50 disabled:opacity-50"
             >

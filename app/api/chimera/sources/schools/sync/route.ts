@@ -1,11 +1,12 @@
 import { NextResponse } from 'next/server';
-import { runGiasSync } from '@/lib/gov-uk-schools/sync';
+import { startGiasSyncAsync } from '@/lib/gov-uk-schools/sync';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
-// The CSV is ~10MB and ~25k rows. Allow plenty of time for the download +
-// parse + chunked upserts.
-export const maxDuration = 300;
+// Just creates the sync row and kicks off the work — returns in well under
+// a second. The work continues via setImmediate after the response is sent.
+// UI polls /api/chimera/sources/schools/status for progress.
+export const maxDuration = 30;
 
 export async function POST(req: Request) {
   let csvOverride: string | undefined;
@@ -18,8 +19,8 @@ export async function POST(req: Request) {
     // no body, auto-fetch
   }
   try {
-    const result = await runGiasSync(csvOverride);
-    return NextResponse.json({ ok: true, ...result });
+    const syncId = await startGiasSyncAsync(csvOverride);
+    return NextResponse.json({ ok: true, syncId });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     return NextResponse.json({ error: message }, { status: 500 });
