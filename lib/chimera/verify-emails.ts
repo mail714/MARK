@@ -1,0 +1,181 @@
+import { createAdminClient } from '@/lib/supabase/admin';
+import { createBulkJob, updateBulkJob, type BulkJob } from './bulk-jobs';
+import { isPushable, verifyEmailsBatch, type EmailStatus } from '@/lib/zerobounce/client';
+
+export async function startEmailVerification(prospectIds: string[]): Promise<string> {
+  const supabase = createAdminClient();
+  // Count the total emails to be verified so the progress bar is meaningful.
+  const { data } = await supabase
+    .from('prospects')
+    .select('emails')
+    .in('id', prospectIds);
+  const totalEmails =
+    ((data ?? []) as { emails: string[] }[]).reduce(
+      (n, r) => n + (r.emails?.length ?? 0),
+      0,
+    );
+
+  const jobId = await createBulkJob({
+    kind: 'verify-emails',
+    total: totalEmails,
+    metadata: { prospect_ids: prospectIds },
+  });
+  setImmediate(() => {
+    runEmailVerification(jobId, prospectIds).catch((err) => {
+      console.error('verify-emails job failed', jobId, err);
+    });
+  });
+  return jobId;
+}
+
+async function runEmailVerification(jobId: string, prospectIds: string[]): Promise<void> {
+  const supabase = createAdminClient();
+
+  let processed = 0;
+  let succeeded = 0;
+  let failed = 0;
+  let validCount = 0;
+  let invalidCount = 0;
+  let unknownCount = 0;
+  const errors: BulkJob['errors'] = [];
+  let lastFlush = Date.now();
+
+  const flush = async () => {
+    await updateBulkJob(jobId, {
+      processed,
+      succeeded,
+      failed,
+      errors: errors.slice(0, 20),
+      last_error: errors[0]?.reason ?? null,
+    });
+    lastFlush = Date.now();
+  };
+
+  try {
+    const { data: prospects, error } = await supabase
+      .from('prospects')
+      .select('id, emails, email_statuses')
+      .in('id', prospectIds);
+    if (error) throw new Error(`Failed to load prospects: ${error.message}`);
+
+    type Row = {
+      id: string;
+      emails: string[];
+      email_statuses: Record<string, EmailStatus>;
+    };
+    const rows = (prospects ?? []) as Row[];
+
+    // De-duplicate emails across prospects so we only spend one credit per
+    // unique email even when several schools share an info@trust.org.uk.
+    const seen = new Set<string>();
+    const unique: string[] = [];
+    for (const p of rows) {
+      for (const e of p.emails ?? []) {
+        const lower = e.trim().toLowerCase();
+        if (!lower || seen.has(lower)) continue;
+        // Skip emails we've already verified — re-running shouldn't burn
+        // fresh credits on the same addresses.
+        if (p.email_statuses && p.email_statuses[lower]) continue;
+        seen.add(lower);
+        unique.push(lower);
+      }
+    }
+
+    // Hit ZeroBounce in batches of 100.
+    const allStatuses = new Map<string, EmailStatus>();
+    for (let i = 0; i < unique.length; i += 100) {
+      const chunk = unique.slice(i, i + 100);
+      try {
+        const statuses = await verifyEmailsBatch(chunk);
+        statuses.forEach((v, k) => allStatuses.set(k, v));
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        errors.push({ id: `batch-${i}`, reason: message });
+        failed += chunk.length;
+      }
+      processed += chunk.length;
+      if (Date.now() - lastFlush > 1500) await flush();
+    }
+
+    // Roll up: merge new statuses into each prospect's email_statuses,
+    // count valid/invalid/unknown for the summary.
+    const now = new Date().toISOString();
+    for (const p of rows) {
+      const next: Record<string, EmailStatus> = { ...(p.email_statuses ?? {}) };
+      let touched = false;
+      for (const e of p.emails ?? []) {
+        const lower = e.trim().toLowerCase();
+        if (!lower) continue;
+        const fresh = allStatuses.get(lower);
+        if (fresh) {
+          next[lower] = fresh;
+          touched = true;
+        }
+        const status = next[lower];
+        if (status === 'valid' || status === 'catch-all') validCount += 1;
+        else if (status === 'unknown') unknownCount += 1;
+        else if (status) invalidCount += 1;
+      }
+      if (touched) {
+        const { error: updateErr } = await supabase
+          .from('prospects')
+          .update({
+            email_statuses: next,
+            emails_verified_at: now,
+          })
+          .eq('id', p.id);
+        if (updateErr) {
+          errors.push({ id: p.id, reason: updateErr.message });
+        } else {
+          succeeded += 1;
+        }
+      }
+    }
+
+    await flush();
+    await updateBulkJob(jobId, {
+      status: 'completed',
+      processed,
+      succeeded,
+      failed,
+      errors: errors.slice(0, 20),
+      finished_at: new Date().toISOString(),
+    });
+    await supabase
+      .from('bulk_jobs')
+      .update({
+        metadata: {
+          prospect_ids: prospectIds,
+          valid: validCount,
+          invalid: invalidCount,
+          unknown: unknownCount,
+        },
+      })
+      .eq('id', jobId);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    await updateBulkJob(jobId, {
+      status: 'failed',
+      last_error: message,
+      finished_at: new Date().toISOString(),
+    });
+  }
+}
+
+// Helper exported so push-to-dotdigital can filter by verification status
+// without re-importing ZeroBounce internals.
+export function filterPushableEmails(
+  emails: string[],
+  statuses: Record<string, EmailStatus> | null | undefined,
+): string[] {
+  if (!statuses || Object.keys(statuses).length === 0) {
+    // No verification done yet — pass through so we don't accidentally
+    // block pushes when ZeroBounce isn't configured.
+    return emails;
+  }
+  return emails.filter((e) => {
+    const status = statuses[e.trim().toLowerCase()];
+    if (!status) return true; // not yet verified — let it through
+    return isPushable(status);
+  });
+}

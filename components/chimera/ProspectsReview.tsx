@@ -115,6 +115,34 @@ export function ProspectsReview({
     }
   }
 
+  async function verifyEmails() {
+    if (selected.size === 0) {
+      setError('Select prospects to verify first.');
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    setMessage(null);
+    try {
+      const res = await fetch('/api/chimera/prospects/verify-emails', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ prospect_ids: [...selected] }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error ?? `Verify failed (${res.status})`);
+      if (data.job_id) {
+        setCurrentJobId(data.job_id as string);
+      } else {
+        setMessage('Verification started.');
+        setBusy(false);
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+      setBusy(false);
+    }
+  }
+
   async function rescanWebsites() {
     if (selected.size === 0) {
       setError('Select prospects to rescan first.');
@@ -285,6 +313,15 @@ export function ProspectsReview({
           </button>
           <button
             type="button"
+            onClick={verifyEmails}
+            disabled={busy || selected.size === 0}
+            className="rounded-md border border-amber-300 bg-white px-3 py-1.5 text-xs font-medium text-amber-700 hover:bg-amber-50 disabled:opacity-50"
+            title="Run each selected prospect's emails through ZeroBounce. Invalid / spam-trap / abuse addresses get flagged and excluded from future dotdigital pushes. ~1 credit per unique email, deduped across selected prospects."
+          >
+            Verify emails ({selected.size})
+          </button>
+          <button
+            type="button"
             onClick={pushToBook}
             disabled={busy || selected.size === 0 || !pushBookId}
             className="rounded-md bg-neutral-900 px-3 py-1.5 text-xs font-medium text-white hover:bg-neutral-700 disabled:opacity-50"
@@ -313,17 +350,33 @@ export function ProspectsReview({
                   ? 'Apollo enrich'
                   : job.kind === 'repair-websites'
                     ? 'Website repair'
-                    : 'dotdigital push';
+                    : job.kind === 'verify-emails'
+                      ? 'Email verification'
+                      : 'dotdigital push';
             const meta = job.metadata as
-              | { suggestions?: number; no_match?: number }
+              | {
+                  suggestions?: number;
+                  no_match?: number;
+                  valid?: number;
+                  invalid?: number;
+                  unknown?: number;
+                }
               | null
               | undefined;
             const extra =
               job.kind === 'repair-websites'
                 ? `${meta?.suggestions ? `, ${meta.suggestions} lower-confidence suggestions to review` : ''}${meta?.no_match ? `, ${meta.no_match} no match` : ''}`
-                : '';
+                : job.kind === 'verify-emails'
+                  ? ` — ${meta?.valid ?? 0} valid, ${meta?.invalid ?? 0} invalid, ${meta?.unknown ?? 0} unknown`
+                  : '';
+            const succeededLabel =
+              job.kind === 'repair-websites'
+                ? 'auto-updated'
+                : job.kind === 'verify-emails'
+                  ? 'prospects updated'
+                  : 'succeeded';
             setMessage(
-              `${kindLabel} ${job.status} — ${job.succeeded} ${job.kind === 'repair-websites' ? 'auto-updated' : 'succeeded'}${job.emails_added ? `, +${job.emails_added} emails` : ''}${job.contacts_added ? `, +${job.contacts_added} contacts` : ''}${extra}${job.failed ? `, ${job.failed} failed` : ''}.`,
+              `${kindLabel} ${job.status} — ${job.succeeded} ${succeededLabel}${job.emails_added ? `, +${job.emails_added} emails` : ''}${job.contacts_added ? `, +${job.contacts_added} contacts` : ''}${extra}${job.failed ? `, ${job.failed} failed` : ''}.`,
             );
           }}
         />
@@ -410,11 +463,27 @@ export function ProspectsReview({
                   {p.emails.length === 0 ? (
                     <span className="text-neutral-400">—</span>
                   ) : null}
-                  {p.emails.map((e) => (
-                    <div key={e} className="truncate font-mono text-[11px]">
-                      {e}
-                    </div>
-                  ))}
+                  {p.emails.map((e) => {
+                    const status = (p.email_statuses ?? {})[e.trim().toLowerCase()];
+                    const tone =
+                      status === 'valid' || status === 'catch-all'
+                        ? 'text-emerald-700'
+                        : status === 'unknown'
+                          ? 'text-amber-700'
+                          : status
+                            ? 'text-red-700'
+                            : 'text-neutral-400';
+                    return (
+                      <div key={e} className="flex items-center gap-1 leading-tight">
+                        <span className="truncate font-mono text-[11px]">{e}</span>
+                        {status ? (
+                          <span className={`text-[9px] uppercase tracking-wider ${tone}`} title={`ZeroBounce: ${status}`}>
+                            ✓ {status}
+                          </span>
+                        ) : null}
+                      </div>
+                    );
+                  })}
                 </td>
                 <td className="px-3 py-2 text-xs">
                   {p.assignments.length === 0 ? (

@@ -52,6 +52,8 @@ export type Prospect = {
   raw: Record<string, unknown> | null;
   sic_codes: string[];
   company_number: string | null;
+  email_statuses: Record<string, string>;
+  emails_verified_at: string | null;
   is_chain: boolean;
   chain_reason: string | null;
   first_found_at: string;

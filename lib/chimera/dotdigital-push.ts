@@ -1,5 +1,7 @@
 import { createAdminClient } from '@/lib/supabase/admin';
 import { dotdigital } from '@/lib/dotdigital/client';
+import { filterPushableEmails } from './verify-emails';
+import type { EmailStatus } from '@/lib/zerobounce/client';
 
 // Push approved prospects (with an email) into a specific dotdigital address
 // book. dotdigital's /v2/address-books/{id}/contacts endpoint accepts a single
@@ -35,7 +37,7 @@ export async function pushProspectsToBook(args: {
   const supabase = createAdminClient();
   const { data: prospects, error } = await supabase
     .from('prospects')
-    .select('id, business_name, emails, phone, website')
+    .select('id, business_name, emails, phone, website, email_statuses')
     .in('id', args.prospectIds);
   if (error) throw new Error(`Failed to load prospects: ${error.message}`);
 
@@ -48,15 +50,28 @@ export async function pushProspectsToBook(args: {
     emails: string[];
     phone: string | null;
     website: string | null;
+    email_statuses: Record<string, EmailStatus> | null;
   }>) {
     if (!p.emails || p.emails.length === 0) {
       out.skipped += 1;
       out.errors.push({ prospectId: p.id, reason: 'No email on prospect' });
       continue;
     }
-    // dotdigital is one-contact-per-email — push the first email found and
-    // record the rest as data fields so the operator can see them in the UI.
-    const primary = p.emails[0];
+    // Filter to verification-pushable emails (valid / catch-all / unknown,
+    // or anything if the prospect's never been verified). Protects the
+    // dotdigital book from bouncy invalid addresses.
+    const pushable = filterPushableEmails(p.emails, p.email_statuses);
+    if (pushable.length === 0) {
+      out.skipped += 1;
+      out.errors.push({
+        prospectId: p.id,
+        reason: 'All emails marked unverifiable — run Verify emails or push manually',
+      });
+      continue;
+    }
+    // dotdigital is one-contact-per-email — push the first pushable email
+    // and record the rest as data fields so the operator can see them.
+    const primary = pushable[0];
     const contact: DotdigitalContact = {
       email: primary,
       optInType: 'Single',

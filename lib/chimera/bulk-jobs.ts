@@ -4,7 +4,8 @@ export type BulkJobKind =
   | 'rescan-website'
   | 'apollo-enrich'
   | 'push-to-dotdigital'
-  | 'repair-websites';
+  | 'repair-websites'
+  | 'verify-emails';
 export type BulkJobStatus = 'running' | 'completed' | 'failed';
 
 export type BulkJob = {
