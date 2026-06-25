@@ -87,6 +87,11 @@ export default async function EmailsPage() {
           title="Reporting"
           description="Per-campaign opens, clicks, unsubscribes and bounces from dotdigital with sector and brand breakdowns. Phase D."
         />
+        <Card
+          href="/emails/reputation"
+          title="Sender reputation"
+          description="Per-brand health from the last 90 days of campaigns plus a live domain blacklist check. Watch bounce, complaint and unsubscribe rates against industry thresholds before pushing a new cold list."
+        />
       </div>
     </div>
   );
