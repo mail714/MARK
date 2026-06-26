@@ -52,11 +52,24 @@ function toneClass(t: 'green' | 'amber' | 'red' | 'neutral'): string {
 }
 
 export default async function ReputationPage() {
-  const [summaries, brands, fromAddresses] = await Promise.all([
+  type FromAddressList = Awaited<ReturnType<typeof listFromAddresses>>;
+  type FromAddressOutcome =
+    | { ok: true; list: FromAddressList }
+    | { ok: false; error: string };
+  const fromAddressPromise: Promise<FromAddressOutcome> = listFromAddresses().then(
+    (list): FromAddressOutcome => ({ ok: true, list }),
+    (err: unknown): FromAddressOutcome => ({
+      ok: false,
+      error: err instanceof Error ? err.message : String(err),
+    }),
+  );
+  const [summaries, brands, fromAddressOutcome] = await Promise.all([
     getReputationSummaries(),
     listBrands(),
-    listFromAddresses().catch(() => []),
+    fromAddressPromise,
   ]);
+  const fromAddresses = fromAddressOutcome.ok ? fromAddressOutcome.list : [];
+  const fromAddressError = fromAddressOutcome.ok ? null : fromAddressOutcome.error;
   const brandsById = new Map(brands.map((b) => [b.id, b]));
 
   // Pull the actual sending domains from dotdigital — those are what
@@ -112,8 +125,15 @@ export default async function ReputationPage() {
         </p>
         {sendingDomains.length === 0 ? (
           <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
-            No from-addresses returned from dotdigital. Check the API credentials or set up
-            a from-address in dotdigital admin.
+            <div className="font-medium">No from-addresses returned from dotdigital.</div>
+            {fromAddressError ? (
+              <div className="mt-1 font-mono text-[10px] break-all">{fromAddressError}</div>
+            ) : (
+              <div className="mt-1">
+                The API call returned an empty list — set up a from-address in dotdigital
+                admin (Settings → Account information → From addresses).
+              </div>
+            )}
           </div>
         ) : (
           <div className="mt-3 space-y-3">
