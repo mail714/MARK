@@ -34,23 +34,28 @@ export async function getReputationSummaries(): Promise<ReputationSummary[]> {
   const supabase = createAdminClient();
   const since = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString();
 
-  const { data: campaigns, error } = await supabase
-    .from('email_campaigns')
-    .select(
-      'id, brand_id, subject, internal_name, email_campaign_stats!inner(date_sent, num_total_sent, num_total_recipients, num_unique_opens, num_unique_clicks, num_hard_bounces, num_soft_bounces, num_unsubscribes, num_spam_complaints)',
-    )
-    .gte('email_campaign_stats.date_sent', since);
-  if (error) throw new Error(`Failed to load reputation data: ${error.message}`);
-
-  const { data: brands } = await supabase
-    .from('brands')
-    .select('id, slug, name')
-    .order('name', { ascending: true });
+  // Two clean queries instead of a relational join — robust to PostgREST
+  // schema-cache state and easier to debug if anything goes wrong.
+  const [{ data: stats, error: statsError }, { data: campaigns, error: campaignsError }, { data: brands }] =
+    await Promise.all([
+      supabase
+        .from('email_campaign_stats')
+        .select(
+          'campaign_id, date_sent, num_total_sent, num_unique_opens, num_unique_clicks, num_hard_bounces, num_soft_bounces, num_unsubscribes, num_spam_complaints',
+        )
+        .gte('date_sent', since),
+      supabase
+        .from('email_campaigns')
+        .select('id, brand_id, subject, internal_name'),
+      supabase.from('brands').select('id, slug, name').order('name', { ascending: true }),
+    ]);
+  if (statsError) throw new Error(`Failed to load stats: ${statsError.message}`);
+  if (campaignsError) throw new Error(`Failed to load campaigns: ${campaignsError.message}`);
 
   type StatsRow = {
+    campaign_id: string;
     date_sent: string | null;
     num_total_sent: number | null;
-    num_total_recipients: number | null;
     num_unique_opens: number | null;
     num_unique_clicks: number | null;
     num_hard_bounces: number | null;
@@ -63,9 +68,11 @@ export async function getReputationSummaries(): Promise<ReputationSummary[]> {
     brand_id: string | null;
     subject: string | null;
     internal_name: string | null;
-    // PostgREST returns the joined stats as an array even on a 1:1 link.
-    email_campaign_stats: StatsRow[] | StatsRow;
   };
+
+  const campaignsById = new Map(
+    ((campaigns ?? []) as CampaignRow[]).map((c) => [c.id, c]),
+  );
 
   const byBrand = new Map<
     string,
@@ -82,12 +89,9 @@ export async function getReputationSummaries(): Promise<ReputationSummary[]> {
     }
   >();
 
-  for (const c of (campaigns ?? []) as CampaignRow[]) {
-    if (!c.brand_id) continue;
-    const s = Array.isArray(c.email_campaign_stats)
-      ? c.email_campaign_stats[0]
-      : c.email_campaign_stats;
-    if (!s) continue;
+  for (const s of (stats ?? []) as StatsRow[]) {
+    const c = campaignsById.get(s.campaign_id);
+    if (!c || !c.brand_id) continue;
     const sent = s.num_total_sent ?? 0;
     const hard = s.num_hard_bounces ?? 0;
     const soft = s.num_soft_bounces ?? 0;
