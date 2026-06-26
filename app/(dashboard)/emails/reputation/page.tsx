@@ -76,16 +76,19 @@ export default async function ReputationPage() {
   // mailbox providers judge for sender reputation. De-dupe across multiple
   // configured from-addresses so we don't pay for the same blacklist
   // lookup twice when (say) info@ and marketing@ are on the same domain.
+  // Fallback to SENDING_DOMAIN env var when dotdigital's API is unhappy
+  // so the dashboard still works.
+  const apiDomains = fromAddresses
+    .map((a) => {
+      const at = a.email.indexOf('@');
+      return at >= 0 ? a.email.slice(at + 1).toLowerCase() : null;
+    })
+    .filter((d): d is string => !!d);
+  const envDomain = (process.env.SENDING_DOMAIN ?? '').trim().toLowerCase();
   const sendingDomains = Array.from(
-    new Set(
-      fromAddresses
-        .map((a) => {
-          const at = a.email.indexOf('@');
-          return at >= 0 ? a.email.slice(at + 1).toLowerCase() : null;
-        })
-        .filter((d): d is string => !!d),
-    ),
+    new Set(apiDomains.length > 0 ? apiDomains : envDomain ? [envDomain] : []),
   );
+  const usingEnvFallback = apiDomains.length === 0 && sendingDomains.length > 0;
 
   const domainHealth = new Map<string, DomainHealth>();
   await Promise.all(
@@ -124,18 +127,28 @@ export default async function ReputationPage() {
           This is what mailbox providers grade.
         </p>
         {sendingDomains.length === 0 ? (
-          <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+          <div className="mt-3 space-y-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
             <div className="font-medium">No from-addresses returned from dotdigital.</div>
             {fromAddressError ? (
-              <div className="mt-1 font-mono text-[10px] break-all">{fromAddressError}</div>
-            ) : (
-              <div className="mt-1">
-                The API call returned an empty list — set up a from-address in dotdigital
-                admin (Settings → Account information → From addresses).
-              </div>
-            )}
+              <div className="font-mono text-[10px] break-all">{fromAddressError}</div>
+            ) : null}
+            <div>
+              dotdigital&apos;s API has moved this endpoint around — none of the known paths
+              worked. Workaround: set <code className="rounded bg-amber-100 px-1">SENDING_DOMAIN</code>{' '}
+              in Render env to the domain you send from (e.g.{' '}
+              <code className="rounded bg-amber-100 px-1">signetsigns.co.uk</code>) and the
+              dashboard will use that instead.
+            </div>
           </div>
         ) : (
+          usingEnvFallback ? (
+            <div className="mt-3 rounded-md border border-neutral-200 bg-neutral-50 px-3 py-1.5 text-[10px] text-neutral-600">
+              Using SENDING_DOMAIN env override (dotdigital API didn&apos;t return a from-address
+              list{fromAddressError ? `: ${fromAddressError}` : ''}).
+            </div>
+          ) : null
+        )}
+        {sendingDomains.length > 0 ? (
           <div className="mt-3 space-y-3">
             {sendingDomains.map((d) => {
               const health = domainHealth.get(d);
@@ -196,7 +209,7 @@ export default async function ReputationPage() {
               .
             </p>
           </div>
-        )}
+        ) : null}
       </section>
 
       <div className="space-y-6">
