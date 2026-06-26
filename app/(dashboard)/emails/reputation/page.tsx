@@ -3,9 +3,9 @@ import { listBrands } from '@/lib/brands';
 import {
   checkDomainHealth,
   getReputationSummaries,
-  sendingDomainForBrand,
   type DomainHealth,
 } from '@/lib/email/reputation';
+import { listFromAddresses } from '@/lib/dotdigital/from-addresses';
 import { swatchForBrand } from '@/lib/email/brand-colours';
 
 export const dynamic = 'force-dynamic';
@@ -52,25 +52,35 @@ function toneClass(t: 'green' | 'amber' | 'red' | 'neutral'): string {
 }
 
 export default async function ReputationPage() {
-  const [summaries, brands] = await Promise.all([getReputationSummaries(), listBrands()]);
+  const [summaries, brands, fromAddresses] = await Promise.all([
+    getReputationSummaries(),
+    listBrands(),
+    listFromAddresses().catch(() => []),
+  ]);
   const brandsById = new Map(brands.map((b) => [b.id, b]));
 
-  // Domain health check is per-brand and runs in parallel — a few DNS
-  // resolves each, ~100ms total per brand.
-  const domainChecks = new Map<string, DomainHealth | null>();
+  // Pull the actual sending domains from dotdigital — those are what
+  // mailbox providers judge for sender reputation. De-dupe across multiple
+  // configured from-addresses so we don't pay for the same blacklist
+  // lookup twice when (say) info@ and marketing@ are on the same domain.
+  const sendingDomains = Array.from(
+    new Set(
+      fromAddresses
+        .map((a) => {
+          const at = a.email.indexOf('@');
+          return at >= 0 ? a.email.slice(at + 1).toLowerCase() : null;
+        })
+        .filter((d): d is string => !!d),
+    ),
+  );
+
+  const domainHealth = new Map<string, DomainHealth>();
   await Promise.all(
-    summaries.map(async (s) => {
-      const brand = brandsById.get(s.brand_id);
-      const domain = sendingDomainForBrand(brand?.website_url ?? null);
-      if (!domain) {
-        domainChecks.set(s.brand_id, null);
-        return;
-      }
+    sendingDomains.map(async (d) => {
       try {
-        const health = await checkDomainHealth(domain);
-        domainChecks.set(s.brand_id, health);
+        domainHealth.set(d, await checkDomainHealth(d));
       } catch {
-        domainChecks.set(s.brand_id, null);
+        // Skip silently — the tile will show as 'not checked'
       }
     }),
   );
@@ -92,22 +102,90 @@ export default async function ReputationPage() {
 
       <ExternalToolsCard />
 
+      <section className="rounded-lg border border-neutral-200 bg-white p-5">
+        <h2 className="text-sm font-semibold uppercase tracking-wider text-neutral-500">
+          Sending domain — blacklist status
+        </h2>
+        <p className="mt-1 text-xs text-neutral-600">
+          Checked against your actual dotdigital from-addresses, not the brand websites.
+          This is what mailbox providers grade.
+        </p>
+        {sendingDomains.length === 0 ? (
+          <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+            No from-addresses returned from dotdigital. Check the API credentials or set up
+            a from-address in dotdigital admin.
+          </div>
+        ) : (
+          <div className="mt-3 space-y-3">
+            {sendingDomains.map((d) => {
+              const health = domainHealth.get(d);
+              return (
+                <div key={d} className="rounded-md border border-neutral-200 bg-neutral-50 p-3">
+                  <div className="flex flex-wrap items-baseline justify-between gap-2">
+                    <span className="font-mono text-sm text-neutral-800">{d}</span>
+                    <span
+                      className={`text-xs ${
+                        !health
+                          ? 'text-neutral-500'
+                          : health.totalListings === 0
+                            ? 'text-emerald-700'
+                            : 'text-red-700'
+                      }`}
+                    >
+                      {health
+                        ? `${health.totalListings} listed / ${health.checks.length} checked`
+                        : 'lookup failed'}
+                    </span>
+                  </div>
+                  {health ? (
+                    <ul className="mt-2 space-y-0.5 font-mono text-[10px]">
+                      {health.checks.map((c) => (
+                        <li
+                          key={c.list}
+                          className={
+                            c.listed
+                              ? 'text-red-700'
+                              : c.error
+                                ? 'text-neutral-400'
+                                : 'text-emerald-700'
+                          }
+                        >
+                          {c.listed ? '✗ LISTED on' : c.error ? '? couldn\'t check' : '✓ clean on'}{' '}
+                          {c.list}
+                          {c.error ? ` — ${c.error}` : ''}
+                          {!c.error && c.result ? ` (${c.result})` : ''}
+                        </li>
+                      ))}
+                    </ul>
+                  ) : null}
+                </div>
+              );
+            })}
+            <p className="text-[10px] text-neutral-500">
+              ⚠ Free DNS blacklists (Spamhaus DBL, SURBL, URIBL) refuse queries from cloud
+              IPs — &quot;couldn&apos;t check&quot; lines mean lookup was blocked, not that you&apos;re listed.
+              For an authoritative check use{' '}
+              <a
+                href="https://mxtoolbox.com/blacklists.aspx"
+                target="_blank"
+                rel="noreferrer"
+                className="underline"
+              >
+                MXToolbox
+              </a>
+              .
+            </p>
+          </div>
+        )}
+      </section>
+
       <div className="space-y-6">
         {summaries.map((s) => {
           const brand = brandsById.get(s.brand_id);
           const swatch = swatchForBrand(brand?.slug ?? null);
-          const health = domainChecks.get(s.brand_id);
           const bTone = bounceTone(s.bounce_rate);
           const cTone = complaintTone(s.complaint_rate);
           const uTone = unsubscribeTone(s.unsubscribe_rate);
-          const blacklistTone =
-            !health
-              ? 'neutral'
-              : health.totalListings === 0
-                ? 'green'
-                : health.totalListings === 1
-                  ? 'amber'
-                  : 'red';
 
           return (
             <section
@@ -115,18 +193,13 @@ export default async function ReputationPage() {
               className={`rounded-lg border-l-4 ${swatch.border} border-y border-r border-neutral-200 bg-white p-5`}
             >
               <header className="flex flex-wrap items-baseline justify-between gap-3">
-                <div className="flex items-baseline gap-3">
-                  <h2 className="text-lg font-semibold tracking-tight">{s.brand_name}</h2>
-                  {health?.domain ? (
-                    <span className="font-mono text-xs text-neutral-500">{health.domain}</span>
-                  ) : null}
-                </div>
+                <h2 className="text-lg font-semibold tracking-tight">{s.brand_name}</h2>
                 <div className="text-xs text-neutral-500">
                   {s.campaigns_90d} campaigns sent in last 90 days · {num(s.total_sent_90d)} emails
                 </div>
               </header>
 
-              <div className="mt-4 grid gap-3 sm:grid-cols-4">
+              <div className="mt-4 grid gap-3 sm:grid-cols-3">
                 <Tile
                   label="Bounce rate"
                   value={pct(s.bounce_rate)}
@@ -145,40 +218,7 @@ export default async function ReputationPage() {
                   sub="target: <0.5%"
                   tone={uTone}
                 />
-                <Tile
-                  label="Blacklists"
-                  value={health ? `${health.totalListings} / ${health.checks.length}` : '—'}
-                  sub={health ? 'DBLs checked' : 'no domain'}
-                  tone={blacklistTone}
-                />
               </div>
-
-              {health && health.checks.length > 0 ? (
-                <details className="mt-3 text-xs">
-                  <summary className="cursor-pointer text-neutral-500 hover:text-neutral-700">
-                    Domain blacklist detail
-                  </summary>
-                  <ul className="mt-1 space-y-0.5 font-mono text-[10px]">
-                    {health.checks.map((c) => (
-                      <li
-                        key={c.list}
-                        className={
-                          c.listed
-                            ? 'text-red-700'
-                            : c.error
-                              ? 'text-neutral-400'
-                              : 'text-emerald-700'
-                        }
-                      >
-                        {c.listed ? '✗ LISTED on' : c.error ? '? unable to check' : '✓ clean on'}{' '}
-                        {c.list}
-                        {c.result ? ` (${c.result})` : ''}
-                        {c.error ? ` (${c.error})` : ''}
-                      </li>
-                    ))}
-                  </ul>
-                </details>
-              ) : null}
 
               {s.worst_campaign && s.worst_campaign.bounce_rate > 0.02 ? (
                 <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">

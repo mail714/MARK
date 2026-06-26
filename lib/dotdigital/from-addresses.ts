@@ -12,9 +12,15 @@ type FromAddress = {
 // preferred address later we'll add brand-specific picking, but for now
 // 'whatever dotdigital lists first' is fine because they only push from
 // one shared marketing address anyway.
-export async function getDefaultFromAddress(): Promise<FromAddress> {
+export async function listFromAddresses(): Promise<FromAddress[]> {
   const list = await dotdigital.get<FromAddress[]>('/v2/account-info/from-addresses');
-  if (!Array.isArray(list) || list.length === 0) {
+  if (!Array.isArray(list)) return [];
+  return list;
+}
+
+export async function getDefaultFromAddress(): Promise<FromAddress> {
+  const list = await listFromAddresses();
+  if (list.length === 0) {
     throw new Error(
       'No from-addresses set up in dotdigital. Add one in Settings → Account information → From addresses before pushing campaigns.',
     );

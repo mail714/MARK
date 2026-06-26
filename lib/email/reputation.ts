@@ -178,10 +178,33 @@ async function checkOne(domain: string, list: { name: string; suffix: string }):
   const query = `${domain}.${list.suffix}`;
   try {
     const addresses = await dns.resolve4(query);
+    const first = addresses[0] ?? null;
+    // Real blacklist listings return 127.0.0.2-99 (each value encoding a
+    // specific reason). Anything in 127.255.x.x — typically what Spamhaus
+    // returns when a query is refused for coming from an open resolver,
+    // or rate-limited — means our query couldn't be properly answered,
+    // NOT that the domain is listed. Treating those as listings produces
+    // false positives across every domain we check.
+    if (first && first.startsWith('127.255.')) {
+      return {
+        list: list.name,
+        listed: false,
+        result: first,
+        error: `lookup blocked by ${list.name} (open-resolver / rate-limit refusal: ${first})`,
+      };
+    }
+    if (first === '127.0.0.255') {
+      return {
+        list: list.name,
+        listed: false,
+        result: first,
+        error: 'lookup error response (127.0.0.255) — query couldn\'t be checked',
+      };
+    }
     return {
       list: list.name,
       listed: true,
-      result: addresses[0] ?? null,
+      result: first,
       error: null,
     };
   } catch (err) {
