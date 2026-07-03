@@ -1,5 +1,6 @@
 import { createAdminClient } from '@/lib/supabase/admin';
 import { dotdigital } from '@/lib/dotdigital/client';
+import { listAllDataFieldNames } from '@/lib/dotdigital/data-fields';
 import { filterPushableEmails } from './verify-emails';
 import type { EmailStatus } from '@/lib/zerobounce/client';
 
@@ -41,6 +42,10 @@ export async function pushProspectsToBook(args: {
     .in('id', args.prospectIds);
   if (error) throw new Error(`Failed to load prospects: ${error.message}`);
 
+  // Only send data fields that actually exist on the dotdigital account —
+  // otherwise the API rejects the whole contact with ERROR_CONTACT_INVALID.
+  const availableFields = await listAllDataFieldNames();
+
   const out: PushResult = { pushed: 0, failed: 0, skipped: 0, errors: [] };
   const now = new Date().toISOString();
 
@@ -72,15 +77,21 @@ export async function pushProspectsToBook(args: {
     // dotdigital is one-contact-per-email — push the first pushable email
     // and record the rest as data fields so the operator can see them.
     const primary = pushable[0];
+    const dataFields: Array<{ key: string; value: string }> = [];
+    if (availableFields.has('FIRSTNAME')) {
+      dataFields.push({ key: 'FIRSTNAME', value: p.business_name });
+    }
+    if (p.phone && availableFields.has('TELEPHONE')) {
+      dataFields.push({ key: 'TELEPHONE', value: p.phone });
+    }
+    if (p.website && availableFields.has('WEBSITE')) {
+      dataFields.push({ key: 'WEBSITE', value: p.website });
+    }
     const contact: DotdigitalContact = {
       email: primary,
       optInType: 'Single',
       emailType: 'Html',
-      dataFields: [
-        { key: 'FIRSTNAME', value: p.business_name },
-        ...(p.phone ? [{ key: 'TELEPHONE', value: p.phone }] : []),
-        ...(p.website ? [{ key: 'WEBSITE', value: p.website }] : []),
-      ],
+      dataFields,
     };
 
     try {
