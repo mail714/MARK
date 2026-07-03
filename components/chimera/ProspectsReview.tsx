@@ -378,6 +378,11 @@ export function ProspectsReview({
             setMessage(
               `${kindLabel} ${job.status} — ${job.succeeded} ${succeededLabel}${job.emails_added ? `, +${job.emails_added} emails` : ''}${job.contacts_added ? `, +${job.contacts_added} contacts` : ''}${extra}${job.failed ? `, ${job.failed} failed` : ''}.`,
             );
+            // Surface the first error so we know what the ESP / verifier
+            // is complaining about instead of just seeing 'X failed'.
+            if (job.failed > 0 && job.last_error) {
+              setError(`First error: ${job.last_error}`);
+            }
           }}
         />
       ) : null}
