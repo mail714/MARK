@@ -15,7 +15,11 @@ export type EmailStatus =
   | 'unknown'
   | 'spamtrap'
   | 'abuse'
-  | 'do_not_mail';
+  | 'do_not_mail'
+  // Not a ZeroBounce result — set by the dotdigital push when the account's
+  // suppression list rejects a contact (previously unsubscribed / bounced /
+  // complained). Kept in the same status map so filters exclude it.
+  | 'suppressed';
 
 export class ZeroBounceError extends Error {
   constructor(message: string, public statusCode: number) {

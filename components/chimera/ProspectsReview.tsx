@@ -525,7 +525,14 @@ export function ProspectsReview({
                       <div key={e} className="flex items-center gap-1 leading-tight">
                         <span className="truncate font-mono text-[11px]">{e}</span>
                         {status ? (
-                          <span className={`text-[9px] uppercase tracking-wider ${tone}`} title={`ZeroBounce: ${status}`}>
+                          <span
+                            className={`text-[9px] uppercase tracking-wider ${tone}`}
+                            title={
+                              status === 'suppressed'
+                                ? 'On the dotdigital suppression list (previously unsubscribed or bounced)'
+                                : `ZeroBounce: ${status}`
+                            }
+                          >
                             ✓ {status}
                           </span>
                         ) : null}

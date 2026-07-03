@@ -74,9 +74,6 @@ export async function pushProspectsToBook(args: {
       });
       continue;
     }
-    // dotdigital is one-contact-per-email — push the first pushable email
-    // and record the rest as data fields so the operator can see them.
-    const primary = pushable[0];
     const dataFields: Array<{ key: string; value: string }> = [];
     if (availableFields.has('FIRSTNAME')) {
       dataFields.push({ key: 'FIRSTNAME', value: p.business_name });
@@ -87,15 +84,46 @@ export async function pushProspectsToBook(args: {
     if (p.website && availableFields.has('WEBSITE')) {
       dataFields.push({ key: 'WEBSITE', value: p.website });
     }
-    const contact: DotdigitalContact = {
-      email: primary,
-      optInType: 'Single',
-      emailType: 'Html',
-      dataFields,
-    };
 
-    try {
-      await pushOne(args.addressBookId, contact);
+    // dotdigital is one-contact-per-email. Try each pushable email in
+    // order: if the account's suppression list rejects one (previously
+    // unsubscribed / hard-bounced / complained), record that against the
+    // email and fall through to the next rather than failing the prospect.
+    const suppressed: string[] = [];
+    let pushed = false;
+    let failure: string | null = null;
+
+    for (const email of pushable) {
+      const contact: DotdigitalContact = {
+        email,
+        optInType: 'Single',
+        emailType: 'Html',
+        dataFields,
+      };
+      try {
+        await pushOne(args.addressBookId, contact);
+        pushed = true;
+        break;
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        if (/ERROR_CONTACT_SUPPRESSED|suppressed/i.test(message)) {
+          suppressed.push(email.trim().toLowerCase());
+          continue;
+        }
+        failure = message;
+        break;
+      }
+    }
+
+    if (suppressed.length > 0) {
+      // Persist so the review UI shows the email as blocked and future
+      // pushes skip it without another round-trip to dotdigital.
+      const next: Record<string, EmailStatus> = { ...(p.email_statuses ?? {}) };
+      for (const e of suppressed) next[e] = 'suppressed';
+      await supabase.from('prospects').update({ email_statuses: next }).eq('id', p.id);
+    }
+
+    if (pushed) {
       await supabase
         .from('prospect_brand_assignments')
         .update({
@@ -106,10 +134,15 @@ export async function pushProspectsToBook(args: {
         .eq('prospect_id', p.id)
         .eq('brand_id', args.brandId);
       out.pushed += 1;
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+    } else if (failure) {
       out.failed += 1;
-      out.errors.push({ prospectId: p.id, reason: message });
+      out.errors.push({ prospectId: p.id, reason: failure });
+    } else {
+      out.skipped += 1;
+      out.errors.push({
+        prospectId: p.id,
+        reason: 'Suppressed in dotdigital (previously unsubscribed or bounced)',
+      });
     }
   }
 
