@@ -6,7 +6,6 @@
 // Each verification is one credit regardless of result.
 
 const SINGLE_URL = 'https://api.zerobounce.net/v2/validate';
-const BATCH_URL = 'https://bulkapi.zerobounce.net/v2/validatebatch';
 const CREDITS_URL = 'https://api.zerobounce.net/v2/getcredits';
 
 export type EmailStatus =
@@ -82,43 +81,50 @@ export async function verifyEmail(email: string): Promise<EmailStatus> {
   return data.status ?? 'unknown';
 }
 
-type BatchResponse = {
-  email_batch: Array<{
-    address: string;
-    status: EmailStatus;
-    sub_status?: string;
-  }>;
-};
+// ZeroBounce's bulk endpoint (bulkapi.zerobounce.net) requires an
+// enterprise-tier account. The single-validate endpoint works on any paid
+// plan, so we call it in parallel to get equivalent throughput without
+// the tier gate. Concurrency of 8 keeps well under ZeroBounce's default
+// 1000-requests-per-minute limit.
+const CONCURRENCY = 8;
 
-// Validates up to 100 emails per request. Caller chunks if more.
 export async function verifyEmailsBatch(
   emails: string[],
 ): Promise<Map<string, EmailStatus>> {
   const out = new Map<string, EmailStatus>();
   if (emails.length === 0) return out;
-  const BATCH = 100;
-  for (let i = 0; i < emails.length; i += BATCH) {
-    const chunk = emails.slice(i, i + BATCH);
-    const res = await fetch(BATCH_URL, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        api_key: apiKey(),
-        email_batch: chunk.map((e) => ({ email_address: e })),
-      }),
-      cache: 'no-store',
-    });
-    if (!res.ok) {
-      const body = await res.text().catch(() => '');
-      throw new ZeroBounceError(
-        `ZeroBounce batch ${res.status}: ${body.slice(0, 200)}`,
-        res.status,
-      );
-    }
-    const data = (await res.json()) as BatchResponse;
-    for (const r of data.email_batch ?? []) {
-      out.set(r.address.toLowerCase(), r.status ?? 'unknown');
-    }
+
+  let cursor = 0;
+  let firstError: Error | null = null;
+
+  const workers = Array.from(
+    { length: Math.min(CONCURRENCY, emails.length) },
+    async () => {
+      for (;;) {
+        const idx = cursor++;
+        if (idx >= emails.length) return;
+        const email = emails[idx];
+        try {
+          const status = await verifyEmail(email);
+          out.set(email.toLowerCase(), status);
+        } catch (err) {
+          // Capture the first failure but keep processing the rest — a
+          // single bad email shouldn't abort the whole batch. Caller
+          // surfaces the error message via the bulk-job progress card.
+          if (!firstError) {
+            firstError = err instanceof Error ? err : new Error(String(err));
+          }
+        }
+      }
+    },
+  );
+  await Promise.all(workers);
+
+  if (firstError && out.size === 0) {
+    // Every single request failed — usually means the key or endpoint is
+    // wrong. Surface that clearly instead of silently returning an empty
+    // map that looks like 'no emails were verifiable'.
+    throw firstError;
   }
   return out;
 }
