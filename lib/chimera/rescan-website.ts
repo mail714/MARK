@@ -1,5 +1,7 @@
 import { createAdminClient } from '@/lib/supabase/admin';
-import { scrapeWebsiteForEmailsAndAddress } from './website-scrape';
+import { domainOf, scrapeWebsiteForEmailsAndAddress } from './website-scrape';
+import { huntEmailsViaGoogle } from './google-email-hunt';
+import { isScrapingBeeConfigured } from '@/lib/scrapingbee/client';
 import { createBulkJob, updateBulkJob, type BulkJob } from './bulk-jobs';
 import { recountSearchCounters } from './recount';
 
@@ -26,7 +28,7 @@ async function runWebsiteRescan(jobId: string, prospectIds: string[]): Promise<v
   try {
     const { data: prospects, error } = await supabase
       .from('prospects')
-      .select('id, business_name, website, emails, postcode')
+      .select('id, business_name, website, emails, postcode, address')
       .in('id', prospectIds);
     if (error) throw new Error(`Failed to load prospects: ${error.message}`);
 
@@ -36,8 +38,11 @@ async function runWebsiteRescan(jobId: string, prospectIds: string[]): Promise<v
       website: string | null;
       emails: string[];
       postcode: string | null;
+      address: string | null;
     };
-    const rows = ((prospects ?? []) as Row[]).filter((p) => !!p.website);
+    // No-website prospects are included: the scrape step is skipped for
+    // them but the Google email hunt below can still find an address.
+    const rows = (prospects ?? []) as Row[];
 
     let processed = 0;
     let succeeded = 0;
@@ -65,43 +70,70 @@ async function runWebsiteRescan(jobId: string, prospectIds: string[]): Promise<v
         const idx = cursor++;
         if (idx >= rows.length) return;
         const p = rows[idx];
-        if (!p.website) {
-          processed += 1;
-          continue;
-        }
-        try {
-          const enrichment = await scrapeWebsiteForEmailsAndAddress(p.website);
-          const before = new Set(p.emails.map((e) => e.toLowerCase()));
-          const merged = [...p.emails];
-          let added = 0;
-          for (const e of enrichment.emails) {
-            if (!before.has(e)) {
-              merged.push(e);
-              before.add(e);
-              added += 1;
+        const before = new Set(p.emails.map((e) => e.toLowerCase()));
+        const merged = [...p.emails];
+        let added = 0;
+        let failure: string | null = null;
+
+        if (p.website) {
+          try {
+            const enrichment = await scrapeWebsiteForEmailsAndAddress(p.website);
+            for (const e of enrichment.emails) {
+              if (!before.has(e)) {
+                merged.push(e);
+                before.add(e);
+                added += 1;
+              }
             }
+          } catch (err) {
+            failure = err instanceof Error ? err.message : String(err);
           }
-          if (added > 0) {
-            const { error: updateErr } = await supabase
-              .from('prospects')
-              .update({ emails: merged })
-              .eq('id', p.id);
-            if (updateErr) {
-              errors.push({ id: p.id, reason: updateErr.message });
-              failed += 1;
-            } else {
-              emailsAdded += added;
-              succeeded += 1;
+        }
+
+        // Google fallback — only when the prospect still has no email at
+        // all after the scrape (or has no website to scrape). Searches
+        // '"Business Name" <postcode> email' via ScrapingBee and extracts
+        // from the snippets / top result pages.
+        if (merged.length === 0 && isScrapingBeeConfigured()) {
+          try {
+            const hunt = await huntEmailsViaGoogle({
+              businessName: p.business_name,
+              locationHint: p.postcode ?? p.address,
+              websiteDomain: domainOf(p.website),
+            });
+            for (const e of hunt.emails) {
+              if (!before.has(e)) {
+                merged.push(e);
+                before.add(e);
+                added += 1;
+              }
             }
+            // The hunt rescued a prospect whose site scrape failed — that
+            // shouldn't count as a failure in the summary.
+            if (added > 0) failure = null;
+          } catch (err) {
+            const message = err instanceof Error ? err.message : String(err);
+            if (!failure) failure = `Google email hunt: ${message}`;
+          }
+        }
+
+        if (added > 0) {
+          const { error: updateErr } = await supabase
+            .from('prospects')
+            .update({ emails: merged })
+            .eq('id', p.id);
+          if (updateErr) {
+            errors.push({ id: p.id, reason: updateErr.message });
+            failed += 1;
           } else {
+            emailsAdded += added;
             succeeded += 1;
           }
-        } catch (err) {
-          errors.push({
-            id: p.id,
-            reason: err instanceof Error ? err.message : String(err),
-          });
+        } else if (failure) {
+          errors.push({ id: p.id, reason: failure });
           failed += 1;
+        } else {
+          succeeded += 1;
         }
         processed += 1;
 

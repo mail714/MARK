@@ -342,7 +342,7 @@ export function ProspectsReview({
             onClick={rescanWebsites}
             disabled={busy || selected.size === 0}
             className="rounded-md border border-blue-300 bg-white px-3 py-1.5 text-xs font-medium text-blue-700 hover:bg-blue-50 disabled:opacity-50"
-            title="Re-visit each selected prospect's website and extract emails. Falls back to ScrapingBee when direct fetch is blocked by the host's firewall or the email is JavaScript-rendered."
+            title="Re-visit each selected prospect's website and extract emails. Falls back to ScrapingBee when the host blocks us, and to a Google search ('business name + email') when the website gives nothing or the prospect has no website."
           >
             Rescan websites ({selected.size})
           </button>

@@ -75,6 +75,62 @@ export async function fetchViaScrapingBee(
   }
 }
 
+// ScrapingBee's Google Search API — returns structured SERP results for a
+// query without us having to scrape Google ourselves. Used as the email
+// hunt of last resort: a search for '"Business Name" <town> email' often
+// surfaces the address in a directory listing or cached contact page that
+// the website scraper never sees. Costs ~20–25 credits per query.
+export type GoogleSearchResult = {
+  url: string;
+  title: string;
+  description: string;
+};
+
+export async function searchGoogleViaScrapingBee(
+  query: string,
+  opts: { countryCode?: string; timeoutMs?: number } = {},
+): Promise<GoogleSearchResult[]> {
+  const key = apiKey();
+  if (!key) throw new ScrapingBeeError('SCRAPINGBEE_API_KEY is not set', 0);
+
+  const params = new URLSearchParams({
+    api_key: key,
+    search: query,
+    country_code: opts.countryCode ?? 'gb',
+    language: 'en',
+    nb_results: '10',
+  });
+
+  const controller = new AbortController();
+  const timeoutMs = opts.timeoutMs ?? 60_000;
+  const timer = setTimeout(() => controller.abort('client-side timeout'), timeoutMs);
+  try {
+    const res = await fetch(`${BASE_URL}store/google?${params.toString()}`, {
+      signal: controller.signal,
+      cache: 'no-store',
+    });
+    if (!res.ok) {
+      const text = await res.text().catch(() => '');
+      throw new ScrapingBeeError(
+        `ScrapingBee Google search returned ${res.status}: ${text.slice(0, 200)}`,
+        res.status,
+      );
+    }
+    const body = (await res.json().catch(() => ({}))) as {
+      organic_results?: Array<{ url?: string; title?: string; description?: string }>;
+    };
+    return (body.organic_results ?? [])
+      .filter((r) => typeof r.url === 'string' && r.url)
+      .map((r) => ({
+        url: r.url as string,
+        title: r.title ?? '',
+        description: r.description ?? '',
+      }));
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 // ScrapingBee's AI extraction endpoint. Takes a URL plus a JSON object of
 // extraction rules (one prompt per field) and returns the extracted values.
 // They handle JS rendering, contact-page navigation and email parsing on
