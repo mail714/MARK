@@ -34,13 +34,49 @@ export function ProspectsReview({
   const [message, setMessage] = useState<string | null>(null);
   const [currentJobId, setCurrentJobId] = useState<string | null>(null);
   const [pushBookId, setPushBookId] = useState<number | null>(addressBooks[0]?.dotdigital_id ?? null);
-  const [filter, setFilter] = useState<'all' | 'with-email' | 'no-email'>('all');
+  const [filter, setFilter] = useState<
+    'all' | 'with-email' | 'no-email' | 'pushable' | 'blocked' | 'unverified'
+  >('all');
+
+  // Statuses that push-to-dotdigital treats as safe to send. Anything
+  // else (invalid, spamtrap, abuse, do_not_mail) gets filtered out at
+  // push time — the operator can find them here to swap emails or skip.
+  const PUSHABLE = useMemo(() => new Set(['valid', 'catch-all', 'unknown']), []);
 
   const filtered = useMemo(() => {
     if (filter === 'with-email') return prospects.filter((p) => p.emails.length > 0);
     if (filter === 'no-email') return prospects.filter((p) => p.emails.length === 0);
+    if (filter === 'pushable') {
+      return prospects.filter((p) => {
+        if (p.emails.length === 0) return false;
+        const statuses = p.email_statuses ?? {};
+        return p.emails.some((e) => {
+          const s = statuses[e.trim().toLowerCase()];
+          // Unverified emails count as pushable — the push-side filter
+          // lets them through when no verification has been run.
+          return !s || PUSHABLE.has(s);
+        });
+      });
+    }
+    if (filter === 'blocked') {
+      return prospects.filter((p) => {
+        if (p.emails.length === 0) return false;
+        const statuses = p.email_statuses ?? {};
+        return p.emails.every((e) => {
+          const s = statuses[e.trim().toLowerCase()];
+          return s && !PUSHABLE.has(s);
+        });
+      });
+    }
+    if (filter === 'unverified') {
+      return prospects.filter((p) => {
+        if (p.emails.length === 0) return false;
+        const statuses = p.email_statuses ?? {};
+        return p.emails.some((e) => !statuses[e.trim().toLowerCase()]);
+      });
+    }
     return prospects;
-  }, [prospects, filter]);
+  }, [prospects, filter, PUSHABLE]);
 
   function toggle(id: string) {
     const next = new Set(selected);
@@ -230,8 +266,11 @@ export function ProspectsReview({
             className="rounded border border-neutral-200 bg-white px-2 py-1 text-xs"
           >
             <option value="all">All</option>
-            <option value="with-email">With email</option>
+            <option value="with-email">With email (any)</option>
             <option value="no-email">No email</option>
+            <option value="pushable">Pushable (would reach dotdigital)</option>
+            <option value="blocked">Blocked by verification</option>
+            <option value="unverified">Has unverified emails</option>
           </select>
         </div>
       </div>
