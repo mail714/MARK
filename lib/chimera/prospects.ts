@@ -48,22 +48,109 @@ export async function upsertProspect(args: {
     chain_reason: args.chain_reason,
     last_seen_at: now,
   };
-  const { data, error } = await supabase
+  // Re-runs must never degrade a prospect: a site that gave us an email
+  // last time might time out this time, and a blind upsert would replace
+  // the good emails with an empty array. Merge instead — union the email
+  // lists and only take new values where they're actually present.
+  const { data: existing } = await supabase
     .from('prospects')
-    .upsert(row, { onConflict: 'source,source_id' })
-    .select('id')
-    .single();
-  if (error) throw new Error(`Failed to upsert prospect: ${error.message}`);
-  const prospectId = data.id as string;
+    .select('id, emails, phone, website, website_domain, address, google_address, address_note, postcode')
+    .eq('source', args.source)
+    .eq('source_id', args.source_id)
+    .maybeSingle();
 
-  // Link this prospect to the originating search (idempotent).
+  let prospectId: string;
+  if (existing) {
+    const prev = existing as {
+      id: string;
+      emails: string[] | null;
+      phone: string | null;
+      website: string | null;
+      website_domain: string | null;
+      address: string | null;
+      google_address: string | null;
+      address_note: string | null;
+      postcode: string | null;
+    };
+    const mergedEmails = Array.from(
+      new Set(
+        [...(prev.emails ?? []), ...args.emails]
+          .map((e) => e.trim().toLowerCase())
+          .filter(Boolean),
+      ),
+    );
+    const { error } = await supabase
+      .from('prospects')
+      .update({
+        ...row,
+        emails: mergedEmails,
+        phone: args.phone ?? prev.phone,
+        website: args.website ?? prev.website,
+        website_domain: args.website_domain ?? prev.website_domain,
+        address: args.address ?? prev.address,
+        google_address: args.google_address ?? prev.google_address,
+        address_note: args.address_note ?? prev.address_note,
+        postcode: args.postcode ?? prev.postcode,
+      })
+      .eq('id', prev.id);
+    if (error) throw new Error(`Failed to update prospect: ${error.message}`);
+    prospectId = prev.id;
+  } else {
+    const { data, error } = await supabase
+      .from('prospects')
+      .upsert(row, { onConflict: 'source,source_id' })
+      .select('id')
+      .single();
+    if (error) throw new Error(`Failed to upsert prospect: ${error.message}`);
+    prospectId = data.id as string;
+  }
+
+  await linkProspectToSearch(prospectId, args.search_id);
+  return prospectId;
+}
+
+// Link a prospect to a search (idempotent). Used when persisting a freshly
+// enriched prospect, and when a re-run rediscovers a business we already
+// have — the new search should list it without re-paying for place
+// details or a website scrape.
+export async function linkProspectToSearch(
+  prospectId: string,
+  searchId: string,
+): Promise<void> {
+  const supabase = createAdminClient();
   await supabase
     .from('prospect_searches')
-    .upsert({ prospect_id: prospectId, search_id: args.search_id }, {
+    .upsert({ prospect_id: prospectId, search_id: searchId }, {
       onConflict: 'prospect_id,search_id',
     });
+}
 
-  return prospectId;
+// Bulk lookup of existing prospects by Google place id, so search runs can
+// skip the paid enrichment (place details + website scrape) for businesses
+// already in the database. Chunked to keep the .in() URL within limits.
+export async function loadExistingProspectsByPlaceId(
+  placeIds: string[],
+): Promise<Map<string, { id: string; emails: string[]; website: string | null }>> {
+  const out = new Map<string, { id: string; emails: string[]; website: string | null }>();
+  if (placeIds.length === 0) return out;
+  const supabase = createAdminClient();
+  for (let i = 0; i < placeIds.length; i += 200) {
+    const chunk = placeIds.slice(i, i + 200);
+    const { data } = await supabase
+      .from('prospects')
+      .select('id, source_id, emails, website')
+      .eq('source', 'google-places')
+      .in('source_id', chunk);
+    for (const r of (data ?? []) as Array<{
+      id: string;
+      source_id: string;
+      emails: string[] | null;
+      website: string | null;
+    }>) {
+      out.set(r.source_id, { id: r.id, emails: r.emails ?? [], website: r.website });
+    }
+  }
+  return out;
 }
 
 export type ProspectListFilters = {

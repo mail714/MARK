@@ -14,7 +14,13 @@ import {
   extractPostcode,
   scrapeWebsiteForEmailsAndAddress,
 } from './website-scrape';
-import { loadSuppressionIndex, isSuppressed, upsertProspect } from './prospects';
+import {
+  loadSuppressionIndex,
+  isSuppressed,
+  upsertProspect,
+  linkProspectToSearch,
+  loadExistingProspectsByPlaceId,
+} from './prospects';
 import { enrichSearchWithCompaniesHouse } from './sources/companies-house';
 import { createAdminClient } from '@/lib/supabase/admin';
 
@@ -66,116 +72,14 @@ export async function runGooglePlacesSearch(searchId: string): Promise<void> {
       },
     });
 
-    // 3. Enrich each place: place details → chain filter → website scrape
-    const suppressions = await loadSuppressionIndex();
-    let withEmail = 0;
-    let withWebsite = 0;
-    let chainsSkipped = 0;
-
-    await runWithConcurrency(found, WEBSITE_WORKER_CONCURRENCY, async (place) => {
-      const details = await placeDetails(place.place_id);
-      if (details?.business_status === 'CLOSED_PERMANENTLY') return;
-
-      const website = details?.website ?? null;
-      const phone = details?.formatted_phone_number ?? null;
-      const googleAddress = details?.formatted_address ?? place.vicinity ?? place.formatted_address ?? null;
-      const rating = details?.rating ?? place.rating ?? null;
-      const reviews = details?.user_ratings_total ?? place.user_ratings_total ?? null;
-      const types = details?.types ?? place.types ?? [];
-
-      const chain = search.apply_chain_filter
-        ? classifyChain(place.name, website, reviews ?? 0)
-        : { isChain: false, reason: '' };
-
-      if (chain.isChain) {
-        chainsSkipped += 1;
-        return; // Don't persist chains at all
-      }
-
-      // Address cross-check + email scrape
-      let finalAddress = googleAddress;
-      let addressNote: string | null = null;
-      let emails: string[] = [];
-      let postcode = googleAddress ? extractPostcode(googleAddress) : null;
-
-      if (website) {
-        try {
-          const enrichment = await scrapeWebsiteForEmailsAndAddress(website);
-          emails = enrichment.emails;
-          if (enrichment.address.postcode) {
-            const googlePc = postcode;
-            const webPc = enrichment.address.postcode;
-            if (googlePc && googlePc !== webPc) {
-              const webParts = [
-                enrichment.address.street,
-                enrichment.address.city,
-                webPc,
-              ].filter(Boolean);
-              finalAddress = webParts.join(', ') || googleAddress;
-              postcode = webPc;
-              addressNote = `Updated — Google: ${googleAddress} | Website: ${finalAddress}`;
-            } else if (googlePc && googlePc === webPc) {
-              addressNote = 'Confirmed — matches Google record';
-            } else if (!googlePc) {
-              postcode = webPc;
-              addressNote = 'Address taken from website (no postcode in Google record)';
-            }
-          } else {
-            addressNote = 'No address found on website';
-          }
-        } catch {
-          addressNote = 'Website scrape failed';
-        }
-      }
-
-      const domain = domainOf(website);
-
-      // Skip suppressed entries entirely. Tracked as 'chains_skipped' just
-      // for the counter — keeps the UI summary honest about volume.
-      if (isSuppressed({ emails, domain, name: place.name }, suppressions)) {
-        chainsSkipped += 1;
-        return;
-      }
-
-      await upsertProspect({
-        source: 'google-places',
-        source_id: place.place_id,
-        business_name: place.name,
-        address: finalAddress,
-        google_address: googleAddress,
-        address_note: addressNote,
-        postcode,
-        phone,
-        website,
-        website_domain: domain,
-        emails,
-        rating,
-        reviews,
-        types,
-        raw: { ...place, details },
-        is_chain: false,
-        chain_reason: null,
-        search_id: searchId,
-      });
-
-      if (emails.length > 0) withEmail += 1;
-      if (website) withWebsite += 1;
-
-      // Update counters as we go so the UI poll shows progress.
-      await updateSearch(searchId, {
-        prospects_with_email: withEmail,
-        prospects_with_website: withWebsite,
-        chains_skipped: chainsSkipped,
-      });
-    });
+    // 3. Enrich each place: place details → chain filter → website scrape.
+    // Shared with the estate-sweep runner — includes the already-known
+    // skip so re-runs don't re-pay for businesses we have.
+    await enrichAndPersist(searchId, search, found);
 
     await updateSearch(searchId, {
       status: 'completed',
       finished_at: new Date().toISOString(),
-      prospects_found: found.length - chainsSkipped,
-      prospects_with_email: withEmail,
-      prospects_with_website: withWebsite,
-      chains_skipped: chainsSkipped,
     });
     await maybeRecordSavedRun(searchId);
   } catch (err) {
@@ -348,8 +252,10 @@ export async function runEstateSweepSearch(searchId: string): Promise<void> {
 }
 
 // Shared enrichment loop: place details → chain filter → suppression check
-// → website scrape → upsert. Used by the sweep runner; the grid runner has
-// its own inline loop kept the same shape so behaviour stays identical.
+// → website scrape → upsert. Used by both the grid and estate-sweep
+// runners. Businesses already in the database are linked to the new search
+// and skipped — no second place-details call, no re-scrape — so re-running
+// or widening a search only pays for businesses we haven't seen before.
 async function enrichAndPersist(
   searchId: string,
   search: Awaited<ReturnType<typeof getSearch>>,
@@ -357,11 +263,28 @@ async function enrichAndPersist(
 ): Promise<void> {
   if (!search) return;
   const suppressions = await loadSuppressionIndex();
+  const existingByPlaceId = await loadExistingProspectsByPlaceId(
+    candidates.map((c) => c.place_id).filter(Boolean),
+  );
   let withEmail = 0;
   let withWebsite = 0;
   let chainsSkipped = 0;
+  let alreadyKnown = 0;
 
   await runWithConcurrency(candidates, WEBSITE_WORKER_CONCURRENCY, async (place) => {
+    const known = existingByPlaceId.get(place.place_id);
+    if (known) {
+      await linkProspectToSearch(known.id, searchId);
+      if (known.emails.length > 0) withEmail += 1;
+      if (known.website) withWebsite += 1;
+      alreadyKnown += 1;
+      await updateSearch(searchId, {
+        prospects_with_email: withEmail,
+        prospects_with_website: withWebsite,
+      });
+      return;
+    }
+
     const details = await placeDetails(place.place_id);
     if (details?.business_status === 'CLOSED_PERMANENTLY') return;
 
@@ -455,4 +378,9 @@ async function enrichAndPersist(
     prospects_with_website: withWebsite,
     chains_skipped: chainsSkipped,
   });
+  if (alreadyKnown > 0) {
+    console.log(
+      `chimera search ${searchId}: ${alreadyKnown}/${candidates.length} businesses already known — skipped paid enrichment`,
+    );
+  }
 }
