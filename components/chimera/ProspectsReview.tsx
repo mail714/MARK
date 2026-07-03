@@ -512,7 +512,16 @@ export function ProspectsReview({
                     <span className="text-neutral-400">—</span>
                   ) : null}
                   {p.emails.map((e) => {
-                    const status = (p.email_statuses ?? {})[e.trim().toLowerCase()];
+                    const statuses = p.email_statuses ?? {};
+                    const status = statuses[e.trim().toLowerCase()];
+                    // Mirror the push-side selection: the first email that's
+                    // unverified or pushable is the one that actually goes
+                    // to dotdigital; blocked ones are never sent.
+                    const willPush = p.emails.find((x) => {
+                      const s = statuses[x.trim().toLowerCase()];
+                      return !s || PUSHABLE.has(s);
+                    });
+                    const blocked = !!status && !PUSHABLE.has(status);
                     const tone =
                       status === 'valid' || status === 'catch-all'
                         ? 'text-emerald-700'
@@ -523,7 +532,14 @@ export function ProspectsReview({
                             : 'text-neutral-400';
                     return (
                       <div key={e} className="flex items-center gap-1 leading-tight">
-                        <span className="truncate font-mono text-[11px]">{e}</span>
+                        <span
+                          className={`truncate font-mono text-[11px] ${
+                            blocked ? 'text-neutral-400 line-through' : ''
+                          }`}
+                          title={blocked ? 'Will NOT be pushed to dotdigital' : undefined}
+                        >
+                          {e}
+                        </span>
                         {status ? (
                           <span
                             className={`text-[9px] uppercase tracking-wider ${tone}`}
@@ -533,7 +549,15 @@ export function ProspectsReview({
                                 : `ZeroBounce: ${status}`
                             }
                           >
-                            ✓ {status}
+                            {blocked ? '✕' : '✓'} {status}
+                          </span>
+                        ) : null}
+                        {p.emails.length > 1 && e === willPush ? (
+                          <span
+                            className="rounded bg-emerald-50 px-1 text-[9px] font-medium text-emerald-700 ring-1 ring-emerald-200"
+                            title="This is the address that will be pushed to dotdigital"
+                          >
+                            pushes
                           </span>
                         ) : null}
                       </div>
