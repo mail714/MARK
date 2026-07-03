@@ -1,6 +1,7 @@
 import { createAdminClient } from '@/lib/supabase/admin';
 import { scrapeWebsiteForEmailsAndAddress } from './website-scrape';
 import { createBulkJob, updateBulkJob, type BulkJob } from './bulk-jobs';
+import { recountSearchCounters } from './recount';
 
 // Starts a rescan as a background job. Creates a bulk_jobs row in
 // 'running' state, kicks off the work via setImmediate (so the HTTP route
@@ -155,34 +156,7 @@ async function recountAffectedSearches(
   const searchIds = Array.from(
     new Set(((links ?? []) as { search_id: string }[]).map((l) => l.search_id)),
   );
-
   for (const searchId of searchIds) {
-    const { data: allLinks } = await supabase
-      .from('prospect_searches')
-      .select('prospect_id')
-      .eq('search_id', searchId);
-    const ids = ((allLinks ?? []) as { prospect_id: string }[]).map((l) => l.prospect_id);
-    if (ids.length === 0) continue;
-
-    const [{ count: withEmail }, { count: withWebsite }] = await Promise.all([
-      supabase
-        .from('prospects')
-        .select('id', { count: 'exact', head: true })
-        .in('id', ids)
-        .not('emails', 'eq', '{}'),
-      supabase
-        .from('prospects')
-        .select('id', { count: 'exact', head: true })
-        .in('id', ids)
-        .not('website', 'is', null),
-    ]);
-
-    await supabase
-      .from('chimera_searches')
-      .update({
-        prospects_with_email: withEmail ?? 0,
-        prospects_with_website: withWebsite ?? 0,
-      })
-      .eq('id', searchId);
+    await recountSearchCounters(searchId);
   }
 }

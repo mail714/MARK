@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { getSearch } from '@/lib/chimera/searches';
+import { recountSearchCounters } from '@/lib/chimera/recount';
 import { listProspects } from '@/lib/chimera/prospects';
 import { listBrands } from '@/lib/brands';
 import { getAddressBooks } from '@/lib/email/address-books';
@@ -20,11 +21,22 @@ export default async function ChimeraSearchPage({
   const search = await getSearch(id);
   if (!search) notFound();
 
-  const [{ items: prospects }, brands, books] = await Promise.all([
+  const isLive = search.status === 'pending' || search.status === 'running';
+  const [counters, { items: prospects }, brands, books] = await Promise.all([
+    // Recompute the header tiles from the linked prospects on every view —
+    // the counters written during the run only reflect what that run
+    // scraped, so rescans/repairs/dedupe leave them stale. Skip while the
+    // search is still running (the run's own live counters are fresher).
+    isLive ? Promise.resolve(null) : recountSearchCounters(id),
     listProspects({ searchId: id, limit: 500 }),
     listBrands(),
     getAddressBooks(),
   ]);
+  if (counters) {
+    search.prospects_found = counters.found;
+    search.prospects_with_email = counters.withEmail;
+    search.prospects_with_website = counters.withWebsite;
+  }
 
   const brandsBare = brands.map((b) => ({ id: b.id, slug: b.slug, name: b.name }));
   const booksBare = books.map((b) => ({
