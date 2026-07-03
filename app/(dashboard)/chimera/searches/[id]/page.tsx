@@ -6,6 +6,7 @@ import { listProspects } from '@/lib/chimera/prospects';
 import { listBrands } from '@/lib/brands';
 import { getAddressBooks } from '@/lib/email/address-books';
 import { DeleteSearchButton } from '@/components/chimera/DeleteSearchButton';
+import { RerunSearchButton } from '@/components/chimera/RerunSearchButton';
 import { SaveSearchButton } from '@/components/chimera/SaveSearchButton';
 import { SearchProgress } from '@/components/chimera/SearchProgress';
 import { ProspectsReview } from '@/components/chimera/ProspectsReview';
@@ -74,6 +75,11 @@ export default async function ChimeraSearchPage({
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
+          <RerunSearchButton
+            searchId={search.id}
+            currentMaxResults={search.max_results}
+            hasPayload={!!search.original_payload}
+          />
           <SaveSearchButton
             searchId={search.id}
             defaultName={defaultName}
