@@ -232,6 +232,10 @@ export function ProspectsReview({
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error ?? `Push failed (${res.status})`);
       setMessage(`Pushed ${data.pushed} · failed ${data.failed} · skipped ${data.skipped}.`);
+      const errs = (data.errors ?? []) as Array<{ prospectId: string; reason: string }>;
+      if ((data.failed ?? 0) > 0 && errs[0]?.reason) {
+        setError(`First failure: ${errs[0].reason}`);
+      }
       router.refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
