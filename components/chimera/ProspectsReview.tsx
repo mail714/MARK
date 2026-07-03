@@ -516,8 +516,13 @@ export function ProspectsReview({
                     const statuses = p.email_statuses ?? {};
                     const status = statuses[e.trim().toLowerCase()];
                     // Mirror the push-side selection exactly — same ranking
-                    // module the push uses, so the badge never lies.
-                    const willPush = rankPushableEmails(p.emails, statuses)[0];
+                    // module and same location hint the push uses, so the
+                    // badge never lies.
+                    const willPush = rankPushableEmails(
+                      p.emails,
+                      statuses,
+                      `${p.address ?? ''} ${p.google_address ?? ''}`,
+                    )[0];
                     const blocked = !!status && !PUSHABLE.has(status);
                     const tone =
                       status === 'valid' || status === 'catch-all'

@@ -38,7 +38,7 @@ export async function pushProspectsToBook(args: {
   const supabase = createAdminClient();
   const { data: prospects, error } = await supabase
     .from('prospects')
-    .select('id, business_name, emails, phone, website, email_statuses')
+    .select('id, business_name, emails, phone, website, email_statuses, address, google_address')
     .in('id', args.prospectIds);
   if (error) throw new Error(`Failed to load prospects: ${error.message}`);
 
@@ -56,16 +56,24 @@ export async function pushProspectsToBook(args: {
     phone: string | null;
     website: string | null;
     email_statuses: Record<string, EmailStatus> | null;
+    address: string | null;
+    google_address: string | null;
   }>) {
     if (!p.emails || p.emails.length === 0) {
       out.skipped += 1;
       out.errors.push({ prospectId: p.id, reason: 'No email on prospect' });
       continue;
     }
-    // Rank the verification-pushable emails best-first (valid generic
-    // inboxes on top; invalid/spamtrap/do_not_mail excluded entirely).
-    // We push the first and fall down the list only on suppression.
-    const pushable = rankPushableEmails(p.emails, p.email_statuses);
+    // Rank the verification-pushable emails best-first (location-matched
+    // branch inboxes, then generic inboxes; invalid/spamtrap/do_not_mail
+    // excluded entirely). We push the first and fall down the list only
+    // on suppression. Both addresses feed the location hint — the scraped
+    // one can be a head-office postcode while Google has the local branch.
+    const pushable = rankPushableEmails(
+      p.emails,
+      p.email_statuses,
+      `${p.address ?? ''} ${p.google_address ?? ''}`,
+    );
     if (pushable.length === 0) {
       out.skipped += 1;
       out.errors.push({
