@@ -11,9 +11,17 @@ const STATUS_TONE: Record<string, string> = {
   failed: 'bg-red-50 text-red-700 ring-red-200',
 };
 
+// A running search stops writing to its row only when the process died
+// (deploys restart the server and kill in-flight runs) or when every
+// worker is stuck in a long scrape timeout. Ten minutes of silence is
+// far beyond any legitimate gap, so we surface a stall warning.
+const STALL_AFTER_MS = 10 * 60 * 1000;
+
 export function SearchProgress({ initial }: { initial: ChimeraSearch }) {
   const router = useRouter();
   const [search, setSearch] = useState<ChimeraSearch>(initial);
+  const [now, setNow] = useState(() => Date.now());
+  const [failBusy, setFailBusy] = useState(false);
   const isLive = search.status === 'pending' || search.status === 'running';
 
   // Sync state to the latest server-rendered prop whenever the parent
@@ -51,6 +59,27 @@ export function SearchProgress({ initial }: { initial: ChimeraSearch }) {
     };
   }, [isLive, router, search.id]);
 
+  // Tick a clock while live so the 'last activity' readout stays honest
+  // even when the row itself has stopped changing.
+  useEffect(() => {
+    if (!isLive) return;
+    const handle = setInterval(() => setNow(Date.now()), 5000);
+    return () => clearInterval(handle);
+  }, [isLive]);
+
+  const lastActivityMs = search.updated_at ? now - Date.parse(search.updated_at) : null;
+  const stalled = isLive && lastActivityMs !== null && lastActivityMs > STALL_AFTER_MS;
+
+  async function markFailed() {
+    setFailBusy(true);
+    try {
+      const res = await fetch(`/api/chimera/searches/${search.id}/fail`, { method: 'POST' });
+      if (res.ok) router.refresh();
+    } finally {
+      setFailBusy(false);
+    }
+  }
+
   const percent =
     search.grid_cells_total && search.grid_cells_total > 0
       ? Math.min(100, Math.round((search.grid_cells_processed / search.grid_cells_total) * 100))
@@ -63,8 +92,31 @@ export function SearchProgress({ initial }: { initial: ChimeraSearch }) {
           {search.status}
         </span>
         {isLive ? <span className="text-neutral-500">Live — refreshing every 3s</span> : null}
+        {isLive && lastActivityMs !== null ? (
+          <span className={stalled ? 'font-medium text-amber-700' : 'text-neutral-400'}>
+            Last activity {formatAgo(lastActivityMs)} ago
+          </span>
+        ) : null}
         {search.last_error ? <span className="text-red-600">Error: {search.last_error}</span> : null}
       </div>
+
+      {stalled ? (
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+          <span>
+            This run has stopped updating — usually a server restart mid-run (deploys do
+            this). It won&apos;t finish on its own. Mark it failed, then use{' '}
+            <strong>Run again</strong>: businesses already processed are skipped for free.
+          </span>
+          <button
+            type="button"
+            onClick={markFailed}
+            disabled={failBusy}
+            className="rounded-md border border-amber-400 bg-white px-2.5 py-1 font-medium text-amber-800 hover:bg-amber-100 disabled:opacity-50"
+          >
+            {failBusy ? '…' : 'Mark as failed'}
+          </button>
+        </div>
+      ) : null}
 
       {percent !== null ? (
         <div>
@@ -88,6 +140,14 @@ export function SearchProgress({ initial }: { initial: ChimeraSearch }) {
       </div>
     </div>
   );
+}
+
+function formatAgo(ms: number): string {
+  const s = Math.max(0, Math.round(ms / 1000));
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m ${s % 60}s`;
+  return `${Math.floor(m / 60)}h ${m % 60}m`;
 }
 
 function Tile({
