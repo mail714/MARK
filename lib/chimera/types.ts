@@ -1,3 +1,5 @@
+import type { EmailStatus } from '@/lib/zerobounce/client';
+
 export type ChimeraSearchStatus = 'pending' | 'running' | 'completed' | 'failed';
 export type ChimeraSource = 'google-places' | 'csv-import' | 'gov-uk-schools';
 export type ChimeraSearchMode = 'grid' | 'estate-sweep' | 'gov-uk-schools';
@@ -52,7 +54,7 @@ export type Prospect = {
   raw: Record<string, unknown> | null;
   sic_codes: string[];
   company_number: string | null;
-  email_statuses: Record<string, string>;
+  email_statuses: Record<string, EmailStatus>;
   emails_verified_at: string | null;
   is_chain: boolean;
   chain_reason: string | null;

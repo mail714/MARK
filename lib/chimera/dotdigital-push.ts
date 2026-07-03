@@ -1,7 +1,7 @@
 import { createAdminClient } from '@/lib/supabase/admin';
 import { dotdigital } from '@/lib/dotdigital/client';
 import { listAllDataFieldNames } from '@/lib/dotdigital/data-fields';
-import { filterPushableEmails } from './verify-emails';
+import { rankPushableEmails } from './email-priority';
 import type { EmailStatus } from '@/lib/zerobounce/client';
 
 // Push approved prospects (with an email) into a specific dotdigital address
@@ -62,10 +62,10 @@ export async function pushProspectsToBook(args: {
       out.errors.push({ prospectId: p.id, reason: 'No email on prospect' });
       continue;
     }
-    // Filter to verification-pushable emails (valid / catch-all / unknown,
-    // or anything if the prospect's never been verified). Protects the
-    // dotdigital book from bouncy invalid addresses.
-    const pushable = filterPushableEmails(p.emails, p.email_statuses);
+    // Rank the verification-pushable emails best-first (valid generic
+    // inboxes on top; invalid/spamtrap/do_not_mail excluded entirely).
+    // We push the first and fall down the list only on suppression.
+    const pushable = rankPushableEmails(p.emails, p.email_statuses);
     if (pushable.length === 0) {
       out.skipped += 1;
       out.errors.push({

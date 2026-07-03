@@ -8,6 +8,7 @@ import type {
   ProspectBrandAssignment,
 } from '@/lib/chimera/types';
 import { normaliseWebsiteUrl } from '@/lib/chimera/website-scrape';
+import { rankPushableEmails } from '@/lib/chimera/email-priority';
 import { BulkJobProgress } from './BulkJobProgress';
 import { UpdateWebsiteButton } from './UpdateWebsiteButton';
 
@@ -514,13 +515,9 @@ export function ProspectsReview({
                   {p.emails.map((e) => {
                     const statuses = p.email_statuses ?? {};
                     const status = statuses[e.trim().toLowerCase()];
-                    // Mirror the push-side selection: the first email that's
-                    // unverified or pushable is the one that actually goes
-                    // to dotdigital; blocked ones are never sent.
-                    const willPush = p.emails.find((x) => {
-                      const s = statuses[x.trim().toLowerCase()];
-                      return !s || PUSHABLE.has(s);
-                    });
+                    // Mirror the push-side selection exactly — same ranking
+                    // module the push uses, so the badge never lies.
+                    const willPush = rankPushableEmails(p.emails, statuses)[0];
                     const blocked = !!status && !PUSHABLE.has(status);
                     const tone =
                       status === 'valid' || status === 'catch-all'

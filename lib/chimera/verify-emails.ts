@@ -1,6 +1,6 @@
 import { createAdminClient } from '@/lib/supabase/admin';
 import { createBulkJob, updateBulkJob, type BulkJob } from './bulk-jobs';
-import { isPushable, verifyEmailsBatch, type EmailStatus } from '@/lib/zerobounce/client';
+import { verifyEmailsBatch, type EmailStatus } from '@/lib/zerobounce/client';
 
 export async function startEmailVerification(prospectIds: string[]): Promise<string> {
   const supabase = createAdminClient();
@@ -160,22 +160,4 @@ async function runEmailVerification(jobId: string, prospectIds: string[]): Promi
       finished_at: new Date().toISOString(),
     });
   }
-}
-
-// Helper exported so push-to-dotdigital can filter by verification status
-// without re-importing ZeroBounce internals.
-export function filterPushableEmails(
-  emails: string[],
-  statuses: Record<string, EmailStatus> | null | undefined,
-): string[] {
-  if (!statuses || Object.keys(statuses).length === 0) {
-    // No verification done yet — pass through so we don't accidentally
-    // block pushes when ZeroBounce isn't configured.
-    return emails;
-  }
-  return emails.filter((e) => {
-    const status = statuses[e.trim().toLowerCase()];
-    if (!status) return true; // not yet verified — let it through
-    return isPushable(status);
-  });
 }
