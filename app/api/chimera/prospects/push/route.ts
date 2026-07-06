@@ -17,6 +17,11 @@ export async function POST(req: Request) {
   const brandId = typeof body.brand_id === 'string' ? body.brand_id : null;
   const addressBookId =
     typeof body.address_book_id === 'number' ? body.address_book_id : null;
+  const maxEmails =
+    typeof body.max_emails_per_prospect === 'number' &&
+    Number.isFinite(body.max_emails_per_prospect)
+      ? Math.max(1, Math.min(99, Math.floor(body.max_emails_per_prospect)))
+      : 1;
 
   if (ids.length === 0 || !brandId || !addressBookId) {
     return NextResponse.json(
@@ -30,6 +35,7 @@ export async function POST(req: Request) {
       prospectIds: ids,
       brandId,
       addressBookId,
+      maxEmailsPerProspect: maxEmails,
     });
     return NextResponse.json({ ok: true, ...result });
   } catch (err) {

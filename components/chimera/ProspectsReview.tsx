@@ -35,6 +35,7 @@ export function ProspectsReview({
   const [message, setMessage] = useState<string | null>(null);
   const [currentJobId, setCurrentJobId] = useState<string | null>(null);
   const [pushBookId, setPushBookId] = useState<number | null>(addressBooks[0]?.dotdigital_id ?? null);
+  const [pushLimit, setPushLimit] = useState<number>(1);
   const [filter, setFilter] = useState<
     'all' | 'with-email' | 'no-email' | 'pushable' | 'blocked' | 'unverified'
   >('all');
@@ -228,11 +229,18 @@ export function ProspectsReview({
           prospect_ids: [...selected],
           brand_id: brandId,
           address_book_id: pushBookId,
+          max_emails_per_prospect: pushLimit,
         }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error ?? `Push failed (${res.status})`);
-      setMessage(`Pushed ${data.pushed} · failed ${data.failed} · skipped ${data.skipped}.`);
+      const contactsNote =
+        typeof data.contactsPushed === 'number' && data.contactsPushed > data.pushed
+          ? ` (${data.contactsPushed} contacts)`
+          : '';
+      setMessage(
+        `Pushed ${data.pushed}${contactsNote} · failed ${data.failed} · skipped ${data.skipped}.`,
+      );
       const errs = (data.errors ?? []) as Array<{ prospectId: string; reason: string }>;
       if ((data.failed ?? 0) > 0 && errs[0]?.reason) {
         setError(`First failure: ${errs[0].reason}`);
@@ -364,6 +372,16 @@ export function ProspectsReview({
           >
             Verify emails ({selected.size})
           </button>
+          <select
+            value={pushLimit}
+            onChange={(e) => setPushLimit(parseInt(e.target.value, 10))}
+            className="rounded-md border border-neutral-300 bg-white px-2 py-1.5 text-xs text-neutral-700"
+            title="How many of each company's emails to push. More contacts improves the odds of reaching the buyer, but the same campaign lands multiple times at one organisation."
+          >
+            <option value={1}>1 email / company (safest)</option>
+            <option value={2}>Top 2 emails / company</option>
+            <option value={99}>All pushable emails</option>
+          </select>
           <button
             type="button"
             onClick={pushToBook}
@@ -516,13 +534,15 @@ export function ProspectsReview({
                     const statuses = p.email_statuses ?? {};
                     const status = statuses[e.trim().toLowerCase()];
                     // Mirror the push-side selection exactly — same ranking
-                    // module and same location hint the push uses, so the
-                    // badge never lies.
-                    const willPush = rankPushableEmails(
-                      p.emails,
-                      statuses,
-                      `${p.address ?? ''} ${p.google_address ?? ''}`,
-                    )[0];
+                    // module, same location hint, same per-company limit as
+                    // the push dropdown — so the badges never lie.
+                    const willPush = new Set(
+                      rankPushableEmails(
+                        p.emails,
+                        statuses,
+                        `${p.address ?? ''} ${p.google_address ?? ''}`,
+                      ).slice(0, pushLimit),
+                    );
                     const blocked = !!status && !PUSHABLE.has(status);
                     const tone =
                       status === 'valid' || status === 'catch-all'
@@ -554,10 +574,10 @@ export function ProspectsReview({
                             {blocked ? '✕' : '✓'} {status}
                           </span>
                         ) : null}
-                        {p.emails.length > 1 && e === willPush ? (
+                        {p.emails.length > 1 && willPush.has(e) ? (
                           <span
                             className="rounded bg-emerald-50 px-1 text-[9px] font-medium text-emerald-700 ring-1 ring-emerald-200"
-                            title="This is the address that will be pushed to dotdigital"
+                            title="This address will be pushed to dotdigital at the current per-company setting"
                           >
                             pushes
                           </span>

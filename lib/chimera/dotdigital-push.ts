@@ -24,7 +24,8 @@ async function pushOne(addressBookId: number, contact: DotdigitalContact): Promi
 }
 
 export type PushResult = {
-  pushed: number;
+  pushed: number;          // prospects with at least one contact created
+  contactsPushed: number;  // total contacts created (≥ pushed when multi-email)
   failed: number;
   skipped: number;
   errors: Array<{ prospectId: string; reason: string }>;
@@ -34,6 +35,11 @@ export async function pushProspectsToBook(args: {
   prospectIds: string[];
   brandId: string;
   addressBookId: number;
+  // How many of a prospect's ranked pushable emails become contacts.
+  // 1 (default) = best address only; higher values improve the odds of
+  // reaching the actual buyer (office@ AND the head, say) at the cost of
+  // the same campaign landing multiple times at one organisation.
+  maxEmailsPerProspect?: number;
 }): Promise<PushResult> {
   const supabase = createAdminClient();
   const { data: prospects, error } = await supabase
@@ -46,8 +52,9 @@ export async function pushProspectsToBook(args: {
   // otherwise the API rejects the whole contact with ERROR_CONTACT_INVALID.
   const availableFields = await listAllDataFieldNames();
 
-  const out: PushResult = { pushed: 0, failed: 0, skipped: 0, errors: [] };
+  const out: PushResult = { pushed: 0, contactsPushed: 0, failed: 0, skipped: 0, errors: [] };
   const now = new Date().toISOString();
+  const limit = Math.max(1, args.maxEmailsPerProspect ?? 1);
 
   for (const p of (prospects ?? []) as Array<{
     id: string;
@@ -93,15 +100,16 @@ export async function pushProspectsToBook(args: {
       dataFields.push({ key: 'WEBSITE', value: p.website });
     }
 
-    // dotdigital is one-contact-per-email. Try each pushable email in
-    // order: if the account's suppression list rejects one (previously
-    // unsubscribed / hard-bounced / complained), record that against the
-    // email and fall through to the next rather than failing the prospect.
+    // dotdigital is one-contact-per-email. Work down the ranked list until
+    // we've created `limit` contacts: suppressed addresses (previously
+    // unsubscribed / hard-bounced / complained) are recorded and don't
+    // count towards the limit; a hard failure stops this prospect.
     const suppressed: string[] = [];
-    let pushed = false;
+    let sent = 0;
     let failure: string | null = null;
 
     for (const email of pushable) {
+      if (sent >= limit) break;
       const contact: DotdigitalContact = {
         email,
         optInType: 'Single',
@@ -110,8 +118,7 @@ export async function pushProspectsToBook(args: {
       };
       try {
         await pushOne(args.addressBookId, contact);
-        pushed = true;
-        break;
+        sent += 1;
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         if (/ERROR_CONTACT_SUPPRESSED|suppressed/i.test(message)) {
@@ -131,7 +138,7 @@ export async function pushProspectsToBook(args: {
       await supabase.from('prospects').update({ email_statuses: next }).eq('id', p.id);
     }
 
-    if (pushed) {
+    if (sent > 0) {
       await supabase
         .from('prospect_brand_assignments')
         .update({
@@ -142,6 +149,12 @@ export async function pushProspectsToBook(args: {
         .eq('prospect_id', p.id)
         .eq('brand_id', args.brandId);
       out.pushed += 1;
+      out.contactsPushed += sent;
+      // Some contacts landed but a later one hard-failed — surface it
+      // without counting the whole prospect as failed.
+      if (failure) {
+        out.errors.push({ prospectId: p.id, reason: `Partial: ${failure}` });
+      }
     } else if (failure) {
       out.failed += 1;
       out.errors.push({ prospectId: p.id, reason: failure });
