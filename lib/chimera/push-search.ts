@@ -78,29 +78,49 @@ export async function startSearchPush(args: {
   );
   const toPush = withEmail.filter((id) => !alreadyPushed.has(id));
 
+  const jobId = await startProspectsPush({
+    prospectIds: toPush,
+    brandId: args.brandId,
+    addressBookId: args.addressBookId,
+    sector: args.sector,
+    maxEmailsPerProspect: args.maxEmailsPerProspect,
+    metadata: { search_id: args.searchId, already_pushed: alreadyPushed.size },
+  });
+  return { jobId, toPush: toPush.length, alreadyPushed: alreadyPushed.size };
+}
+
+// Job-based push for an explicit prospect list. Used by the search-wide
+// push above, and by the selected-prospects push whenever the selection is
+// too large to complete inside one HTTP request.
+export async function startProspectsPush(args: {
+  prospectIds: string[];
+  brandId: string;
+  addressBookId: number;
+  sector?: string | null;
+  maxEmailsPerProspect?: number;
+  metadata?: Record<string, unknown>;
+}): Promise<string> {
   const jobId = await createBulkJob({
     kind: 'push-to-dotdigital',
-    total: toPush.length,
+    total: args.prospectIds.length,
     metadata: {
-      search_id: args.searchId,
       address_book_id: args.addressBookId,
-      already_pushed: alreadyPushed.size,
       max_emails_per_prospect: args.maxEmailsPerProspect ?? 1,
+      ...(args.metadata ?? {}),
     },
   });
   setImmediate(() => {
-    runSearchPush(jobId, toPush, args).catch((err) => {
+    runSearchPush(jobId, args.prospectIds, args).catch((err) => {
       console.error('push-to-dotdigital job failed', jobId, err);
     });
   });
-  return { jobId, toPush: toPush.length, alreadyPushed: alreadyPushed.size };
+  return jobId;
 }
 
 async function runSearchPush(
   jobId: string,
   prospectIds: string[],
   args: {
-    searchId: string;
     brandId: string;
     addressBookId: number;
     sector?: string | null;

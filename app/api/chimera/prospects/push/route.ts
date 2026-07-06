@@ -1,5 +1,12 @@
 import { NextResponse } from 'next/server';
 import { pushProspectsToBook } from '@/lib/chimera/dotdigital-push';
+import { startProspectsPush } from '@/lib/chimera/push-search';
+
+// Selections small enough to push within one request run synchronously so
+// the UI gets the familiar instant summary; anything bigger becomes a
+// bulk job the progress card polls — a 1,500-prospect selection would
+// blow straight past the route timeout otherwise.
+const SYNC_LIMIT = 100;
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -31,6 +38,15 @@ export async function POST(req: Request) {
   }
 
   try {
+    if (ids.length > SYNC_LIMIT) {
+      const jobId = await startProspectsPush({
+        prospectIds: ids,
+        brandId,
+        addressBookId,
+        maxEmailsPerProspect: maxEmails,
+      });
+      return NextResponse.json({ ok: true, job_id: jobId });
+    }
     const result = await pushProspectsToBook({
       prospectIds: ids,
       brandId,

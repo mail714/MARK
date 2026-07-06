@@ -99,10 +99,40 @@ export function ProspectsReview({
   }
 
   function toggleAll() {
-    if (selected.size === filtered.length) {
+    if (selected.size >= filtered.length && filtered.length > 0) {
       setSelected(new Set());
     } else {
       setSelected(new Set(filtered.map((p) => p.id)));
+    }
+  }
+
+  // 'Select all' on a paginated search: the header checkbox selects the
+  // visible page, then this pulls every matching id in the whole search
+  // from the server (same filter logic) so bulk actions reach past the
+  // 500-row page.
+  const [expandingSelection, setExpandingSelection] = useState(false);
+  const pageAllSelected =
+    filtered.length > 0 && filtered.every((p) => selected.has(p.id));
+  const selectionBeyondPage = selected.size > filtered.length;
+  const canExpandSelection =
+    !!searchId && !!searchTotal && searchTotal > prospects.length;
+
+  async function selectWholeSearch() {
+    if (!searchId) return;
+    setExpandingSelection(true);
+    setError(null);
+    try {
+      const res = await fetch(
+        `/api/chimera/searches/${searchId}/prospect-ids?filter=${filter}`,
+        { cache: 'no-store' },
+      );
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error ?? `Failed (${res.status})`);
+      setSelected(new Set(data.ids as string[]));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setExpandingSelection(false);
     }
   }
 
@@ -245,6 +275,13 @@ export function ProspectsReview({
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error ?? `Push failed (${res.status})`);
+      // Large selections run as a background job — hand over to the
+      // progress card (which keeps `busy` until onDone) instead of
+      // expecting an instant summary.
+      if (data.job_id) {
+        setCurrentJobId(data.job_id as string);
+        return;
+      }
       const contactsNote =
         typeof data.contactsPushed === 'number' && data.contactsPushed > data.pushed
           ? ` (${data.contactsPushed} contacts)`
@@ -257,9 +294,9 @@ export function ProspectsReview({
         setError(`First failure: ${errs[0].reason}`);
       }
       router.refresh();
+      setBusy(false);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
-    } finally {
       setBusy(false);
     }
   }
@@ -344,6 +381,38 @@ export function ProspectsReview({
           </select>
         </div>
       </div>
+
+      {canExpandSelection && pageAllSelected && !selectionBeyondPage ? (
+        <div className="flex flex-wrap items-center gap-2 rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-800">
+          <span>
+            All {filtered.length} on this page are selected — the search has more prospects on
+            other pages.
+          </span>
+          <button
+            type="button"
+            onClick={selectWholeSearch}
+            disabled={expandingSelection}
+            className="rounded-md border border-blue-400 bg-white px-2.5 py-1 font-medium text-blue-800 hover:bg-blue-100 disabled:opacity-50"
+          >
+            {expandingSelection ? 'Selecting…' : `Select all matching in the whole search`}
+          </button>
+        </div>
+      ) : null}
+      {selectionBeyondPage ? (
+        <div className="flex flex-wrap items-center gap-2 rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-800">
+          <span>
+            <strong>{selected.size.toLocaleString('en-GB')}</strong> prospects selected across the
+            whole search — bulk actions will cover all of them, not just this page.
+          </span>
+          <button
+            type="button"
+            onClick={() => setSelected(new Set())}
+            className="rounded-md border border-blue-400 bg-white px-2.5 py-1 font-medium text-blue-800 hover:bg-blue-100"
+          >
+            Clear selection
+          </button>
+        </div>
+      ) : null}
 
       <div className="grid gap-3 rounded-lg border border-neutral-200 bg-white p-3 sm:grid-cols-2 lg:grid-cols-4">
         <Field label="Brand">
@@ -524,7 +593,7 @@ export function ProspectsReview({
               <th className="w-8 px-3 py-2">
                 <input
                   type="checkbox"
-                  checked={selected.size > 0 && selected.size === filtered.length}
+                  checked={pageAllSelected}
                   onChange={toggleAll}
                 />
               </th>
