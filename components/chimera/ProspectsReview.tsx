@@ -20,10 +20,15 @@ export function ProspectsReview({
   prospects,
   brands,
   addressBooks,
+  searchTotal,
 }: {
   prospects: Row[];
   brands: Brand[];
   addressBooks: AddressBook[];
+  // Total prospects across the whole search — larger than prospects.length
+  // when the parent page is paginating. Shown so '200 with email' can't be
+  // mistaken for the search-wide figure in the header tiles.
+  searchTotal?: number;
 }) {
   const router = useRouter();
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -264,7 +269,12 @@ export function ProspectsReview({
         <div className="flex items-center gap-3 text-neutral-600">
           <span>
             <strong className="text-neutral-900">{counts.withEmail}</strong> with email
-            <span className="text-neutral-400"> / {counts.total} total</span>
+            <span className="text-neutral-400">
+              {' '}/ {counts.total}
+              {searchTotal && searchTotal > counts.total
+                ? ` on this page (${searchTotal.toLocaleString('en-GB')} in search)`
+                : ' total'}
+            </span>
           </span>
           <span className="text-neutral-300">·</span>
           <span>
