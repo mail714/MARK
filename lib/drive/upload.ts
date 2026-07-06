@@ -91,7 +91,7 @@ export async function addFilesToFolder(args: {
     }));
   }
 
-  let photoIds: string[] = [];
+  const photoIds: string[] = [];
   if (photos.length > 0) {
     let photosFolderId = await findChildFolderByName(args.folderId, 'photos');
     if (!photosFolderId) {
@@ -143,7 +143,7 @@ export async function createCaseStudyFolder(args: {
     }));
   }
 
-  let photoIds: string[] = [];
+  const photoIds: string[] = [];
   if (photos.length > 0) {
     const photosFolderId = await createFolder(folderId, 'photos');
     for (const photo of photos) {

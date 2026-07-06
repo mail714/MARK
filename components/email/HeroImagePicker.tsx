@@ -53,6 +53,7 @@ export function HeroImagePicker({ campaignId, selectedUrl, selectedAlt, defaultS
 
   useEffect(() => {
     if (images !== null) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- load() flips the loading flag; refetch-on-filter-change is intentional
       void load();
     }
     // Only re-fetch when sectorFilter changes after the first open.

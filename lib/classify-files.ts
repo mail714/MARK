@@ -55,7 +55,7 @@ export function classifyForPreview(
   // First-pass tallies (treat already-present roles as taken).
   let soSeen = context.hasSalesOrder ? 1 : 0;
   let proofSeen = context.hasProof ? 1 : 0;
-  let orphanPdfs: ClassifiedFile[] = [];
+  const orphanPdfs: ClassifiedFile[] = [];
   for (const f of out) {
     if (f.role === 'sales-order') soSeen++;
     else if (f.role === 'proof') proofSeen++;
