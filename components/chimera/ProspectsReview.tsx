@@ -21,6 +21,8 @@ export function ProspectsReview({
   brands,
   addressBooks,
   searchTotal,
+  searchId,
+  searchWithEmail,
 }: {
   prospects: Row[];
   brands: Brand[];
@@ -29,6 +31,10 @@ export function ProspectsReview({
   // when the parent page is paginating. Shown so '200 with email' can't be
   // mistaken for the search-wide figure in the header tiles.
   searchTotal?: number;
+  // When set, enables the search-wide push (every with-email prospect in
+  // the search, across all pages, as a background job).
+  searchId?: string;
+  searchWithEmail?: number;
 }) {
   const router = useRouter();
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -258,6 +264,47 @@ export function ProspectsReview({
     }
   }
 
+  async function pushWholeSearch() {
+    if (!searchId || !brandId || !pushBookId) {
+      setError('Pick a brand and a dotdigital book first.');
+      return;
+    }
+    const bookName =
+      addressBooks.find((b) => b.dotdigital_id === pushBookId)?.name ?? 'the selected book';
+    const approx = searchWithEmail ? `~${searchWithEmail.toLocaleString('en-GB')} ` : '';
+    if (
+      !window.confirm(
+        `Push ${approx}with-email prospects from this ENTIRE search (all pages) to "${bookName}"? Companies already pushed to this book are skipped, and only verified-pushable emails are sent.`,
+      )
+    ) {
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    setMessage(null);
+    try {
+      const res = await fetch(`/api/chimera/searches/${searchId}/push`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          brand_id: brandId,
+          address_book_id: pushBookId,
+          sector: sector || null,
+          max_emails_per_prospect: pushLimit,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error ?? `Push failed (${res.status})`);
+      if (typeof data.already_pushed === 'number' && data.already_pushed > 0) {
+        setMessage(`${data.already_pushed} already in this book — pushing the remaining ${data.to_push}.`);
+      }
+      setCurrentJobId(data.job_id as string);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+      setBusy(false);
+    }
+  }
+
   const counts = {
     withEmail: prospects.filter((p) => p.emails.length > 0).length,
     total: prospects.length,
@@ -400,6 +447,17 @@ export function ProspectsReview({
           >
             Push selected → dotdigital
           </button>
+          {searchId ? (
+            <button
+              type="button"
+              onClick={pushWholeSearch}
+              disabled={busy || !pushBookId}
+              title="Push every with-email prospect in this search — all pages, not just the ones shown or selected. Runs in the background; already-pushed companies are skipped."
+              className="rounded-md border border-neutral-900 bg-white px-3 py-1.5 text-xs font-medium text-neutral-900 hover:bg-neutral-100 disabled:opacity-50"
+            >
+              Push whole search{searchWithEmail ? ` (${searchWithEmail.toLocaleString('en-GB')})` : ''}
+            </button>
+          ) : null}
           {error ? <div className="text-xs text-red-600">{error}</div> : null}
           {message ? <div className="text-xs text-emerald-700">{message}</div> : null}
         </div>

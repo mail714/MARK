@@ -140,6 +140,8 @@ export default async function ChimeraSearchPage({
           brands={brandsBare}
           addressBooks={booksBare}
           searchTotal={prospectTotal}
+          searchId={search.id}
+          searchWithEmail={search.prospects_with_email}
         />
       </section>
     </div>
