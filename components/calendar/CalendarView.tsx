@@ -1,10 +1,13 @@
 'use client';
 
 import { useMemo, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import type { CalendarEvent } from '@/lib/calendar/events';
+import type { CalendarEntry } from '@/lib/calendar/manual';
 import { swatchForBrand } from '@/lib/email/brand-colours';
 import { PLATFORM_DOT } from '@/lib/social/platforms';
 import { CalendarEventModal } from './CalendarEventModal';
+import { ManualEntryModal, type ManualModalState } from './ManualEntryModal';
 
 type Brand = { id: string; slug: string; name: string };
 
@@ -16,11 +19,15 @@ const STATUS_TONE: Record<string, string> = {
   pushed: 'bg-emerald-50 text-emerald-800 ring-emerald-200',
   failed: 'bg-red-50 text-red-700 ring-red-200',
   Published: 'bg-emerald-50 text-emerald-800 ring-emerald-200',
+  planned: 'bg-amber-50 text-amber-800 ring-amber-200',
+  confirmed: 'bg-emerald-50 text-emerald-800 ring-emerald-200',
+  done: 'bg-neutral-100 text-neutral-600 ring-neutral-200',
 };
 
 const SOURCE_DOT: Record<string, string> = {
   email: 'bg-neutral-400',
   'case-study': 'bg-fuchsia-500',
+  manual: 'bg-teal-500',
 };
 
 function pad(n: number): string {
@@ -47,9 +54,24 @@ export function CalendarView({
   year: number;
   month: number;
 }) {
+  const router = useRouter();
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
+  const [manualModal, setManualModal] = useState<ManualModalState | null>(null);
 
   const brandsById = useMemo(() => new Map(brands.map((b) => [b.id, b])), [brands]);
+
+  // Clicking any event opens a modal — read-only details for module-owned
+  // events, the edit form for manual entries.
+  function openEvent(e: CalendarEvent) {
+    if (e.source === 'manual') {
+      const entry = e.detail.entry as CalendarEntry | undefined;
+      if (entry) {
+        setManualModal({ mode: 'edit', entry });
+        return;
+      }
+    }
+    setSelectedKey(e.key);
+  }
 
   const cells = useMemo(() => {
     const startOfMonth = new Date(year, month - 1, 1);
@@ -82,6 +104,15 @@ export function CalendarView({
 
   return (
     <>
+      <div className="mb-2 flex justify-end">
+        <button
+          type="button"
+          onClick={() => setManualModal({ mode: 'create', date: todayKey })}
+          className="rounded-md border border-teal-300 bg-white px-3 py-1.5 text-xs font-medium text-teal-700 hover:bg-teal-50"
+        >
+          ＋ Add entry
+        </button>
+      </div>
       <div className="overflow-hidden rounded-lg border border-neutral-200 bg-white">
         <div className="grid grid-cols-7 border-b border-neutral-200 bg-neutral-50 text-xs font-medium uppercase tracking-wider text-neutral-500">
           {WEEKDAY_LABELS.map((day) => (
@@ -104,12 +135,23 @@ export function CalendarView({
             return (
               <div
                 key={key}
-                className={`min-h-28 border-b border-r border-neutral-100 p-1.5 last:border-r-0 ${
+                className={`group min-h-28 border-b border-r border-neutral-100 p-1.5 last:border-r-0 ${
                   isToday ? 'bg-amber-50/40' : ''
                 }`}
               >
-                <div className={`mb-1 text-xs ${isToday ? 'font-semibold text-amber-800' : 'text-neutral-500'}`}>
-                  {cell.date.getDate()}
+                <div className="mb-1 flex items-center justify-between">
+                  <span className={`text-xs ${isToday ? 'font-semibold text-amber-800' : 'text-neutral-500'}`}>
+                    {cell.date.getDate()}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setManualModal({ mode: 'create', date: key })}
+                    aria-label={`Add entry on ${key}`}
+                    title="Add entry on this day"
+                    className="rounded px-1 text-xs leading-none text-neutral-300 opacity-0 transition-opacity hover:bg-teal-50 hover:text-teal-700 focus-visible:opacity-100 group-hover:opacity-100"
+                  >
+                    ＋
+                  </button>
                 </div>
                 <div className="space-y-1">
                   {items.map((e) => {
@@ -124,7 +166,7 @@ export function CalendarView({
                       <button
                         key={e.key}
                         type="button"
-                        onClick={() => setSelectedKey(e.key)}
+                        onClick={() => openEvent(e)}
                         className={`block w-full rounded border-l-4 ${swatch.border} ${swatch.bg} px-2 py-1.5 text-left text-xs leading-snug hover:opacity-90`}
                       >
                         <div className="flex items-center gap-1">
@@ -168,6 +210,16 @@ export function CalendarView({
         event={selected}
         brand={selectedBrand}
         onClose={() => setSelectedKey(null)}
+      />
+
+      <ManualEntryModal
+        state={manualModal}
+        brands={brands}
+        onClose={() => setManualModal(null)}
+        onSaved={() => {
+          setManualModal(null);
+          router.refresh();
+        }}
       />
     </>
   );

@@ -1,13 +1,14 @@
 import { createAdminClient } from '@/lib/supabase/admin';
 import { listSocialPostsForRange } from '@/lib/social/posts';
 import { listBrandSocialAccounts } from '@/lib/social/accounts';
+import { listCalendarEntries } from './manual';
 import type { SocialPlatform } from '@/lib/social/platforms';
 
 // Unified shape for anything that lands on the marketing calendar — emails,
 // case studies, social posts, etc. The calendar UI doesn't care which
 // module produced the event; it cares about brand, sector, date, status and
 // a link back to the source's detail page.
-export type CalendarEventSource = 'email' | 'case-study' | 'social';
+export type CalendarEventSource = 'email' | 'case-study' | 'social' | 'manual';
 
 export type CalendarEvent = {
   // Stable id, namespaced by source so we can dedupe / key safely.
@@ -183,16 +184,40 @@ async function fetchSocialEvents(
   return events;
 }
 
+async function fetchManualEvents(start: Date, end: Date): Promise<CalendarEvent[]> {
+  const entries = await listCalendarEntries(start, end);
+  return entries.map((e) => ({
+    key: `manual-${e.id}`,
+    source: 'manual' as const,
+    sourceId: e.id,
+    date: e.event_date,
+    brandId: e.brand_id,
+    sector: e.sector,
+    title: e.title,
+    subtitle: e.notes ? e.notes.slice(0, 80) : null,
+    status: e.status,
+    // Manual entries have no module detail page — the calendar itself is
+    // their home. Clicking one opens the edit form instead of this link.
+    detailHref: '/calendar',
+    liveUrl: null,
+    detail: {
+      notes: e.notes,
+      entry: e,
+    },
+  }));
+}
+
 export async function listCalendarEvents(
   start: Date,
   end: Date,
 ): Promise<CalendarEvent[]> {
-  const [emails, caseStudies, social] = await Promise.all([
+  const [emails, caseStudies, social, manual] = await Promise.all([
     fetchEmailEvents(start, end),
     fetchCaseStudyEvents(start, end),
     fetchSocialEvents(start, end),
+    fetchManualEvents(start, end),
   ]);
-  return [...emails, ...caseStudies, ...social].sort((a, b) =>
+  return [...emails, ...caseStudies, ...social, ...manual].sort((a, b) =>
     a.date.localeCompare(b.date),
   );
 }

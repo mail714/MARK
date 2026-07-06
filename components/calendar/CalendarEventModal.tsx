@@ -11,6 +11,7 @@ const SOURCE_LABEL: Record<string, string> = {
   email: 'Email campaign',
   'case-study': 'Case study published',
   social: 'Social post',
+  manual: 'Calendar entry',
 };
 
 const PLATFORM_LABEL: Record<string, string> = {

@@ -111,6 +111,10 @@ export default async function CalendarPage({
           Case study published
         </span>
         <span className="inline-flex items-center gap-1">
+          <span className="h-2 w-2 rounded-full bg-teal-500" />
+          Manual entry
+        </span>
+        <span className="inline-flex items-center gap-1">
           <span className="h-2 w-2 rounded-full bg-pink-500" />
           Instagram
         </span>
