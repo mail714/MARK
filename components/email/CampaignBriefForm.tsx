@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import { toLocalInputValue } from '@/lib/datetime-local';
 
 type Brand = { id: string; slug: string; name: string };
 type AddressBook = { dotdigital_id: number; name: string; contact_count: number | null };
@@ -39,12 +40,12 @@ export function CampaignBriefForm({ campaignId, brands, addressBooks, initial }:
   const [sector, setSector] = useState(initial.sector ?? '');
   const [campaignType, setCampaignType] = useState(initial.campaign_type ?? '');
   const [templateKey, setTemplateKey] = useState(initial.template_key ?? 'simple-hero');
-  // The HTML datetime-local input wants 'YYYY-MM-DDTHH:mm' — slice the ISO
-  // string down to that shape, in local time. We round to the minute.
+  // The HTML datetime-local input wants 'YYYY-MM-DDTHH:mm' in LOCAL time.
+  // toISOString() would render UTC wall-clock, which the save path would
+  // then re-parse as local — shifting the send an hour earlier on every
+  // blur during BST. Format the local components explicitly instead.
   const [plannedSendAt, setPlannedSendAt] = useState(
-    initial.planned_send_at
-      ? new Date(initial.planned_send_at).toISOString().slice(0, 16)
-      : '',
+    initial.planned_send_at ? toLocalInputValue(initial.planned_send_at) : '',
   );
   const [intent, setIntent] = useState(initial.intent ?? '');
   const [bookIds, setBookIds] = useState<number[]>(initial.address_book_ids);

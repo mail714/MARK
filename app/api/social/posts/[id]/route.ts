@@ -37,6 +37,22 @@ export async function PATCH(req: Request, ctx: Ctx) {
   if (Object.keys(fields).length === 0) {
     return NextResponse.json({ error: 'No editable fields supplied' }, { status: 400 });
   }
+  // Validate enum/shape fields up front so bad input gets a 400 with a
+  // clear message, not a 500 from a Postgres CHECK constraint.
+  const STATUSES = new Set(['draft', 'approved', 'scheduled', 'published', 'failed']);
+  const PLATFORMS = new Set(['instagram', 'facebook', 'tiktok', 'linkedin', 'pinterest']);
+  if (fields.status !== undefined && !STATUSES.has(String(fields.status))) {
+    return NextResponse.json({ error: `Invalid status '${fields.status}'` }, { status: 400 });
+  }
+  if (fields.platform !== undefined && !PLATFORMS.has(String(fields.platform))) {
+    return NextResponse.json({ error: `Invalid platform '${fields.platform}'` }, { status: 400 });
+  }
+  if (fields.hashtags !== undefined && !Array.isArray(fields.hashtags)) {
+    return NextResponse.json({ error: 'hashtags must be an array' }, { status: 400 });
+  }
+  if (fields.media_urls !== undefined && !Array.isArray(fields.media_urls)) {
+    return NextResponse.json({ error: 'media_urls must be an array' }, { status: 400 });
+  }
   try {
     await updateSocialPost(id, fields);
     return NextResponse.json({ ok: true });

@@ -21,8 +21,11 @@ const MAILTO_RE = /href=["']mailto:([^"'?]+)/gi;
 const OBFUSCATED_PATTERNS: RegExp[] = [
   // 'office [at] school.uk' / 'office (at) school.uk' / 'office {at} school.uk'
   /([a-zA-Z0-9._%+\-]+)\s*[\[({]\s*at\s*[\])}]\s*([a-zA-Z0-9.\-]+\.[a-zA-Z]{2,})/gi,
-  // 'office AT school.uk' (single word ' at ' with spaces, must be lowercase 'at' between local-part and domain)
-  /([a-zA-Z0-9._%+\-]+)\s+at\s+([a-zA-Z0-9.\-]+\.[a-zA-Z]{2,})/gi,
+  // 'office at school dot uk' — bare 'at' is ONLY trusted when paired with
+  // a spelled-out 'dot', otherwise ordinary prose ('find us at
+  // ourcompany.co.uk', 'based at westfield.co.uk') mints garbage
+  // addresses that pollute prospects and burn verification credits.
+  /([a-zA-Z0-9._%+\-]+)\s+at\s+([a-zA-Z0-9\-]+)\s+dot\s+([a-zA-Z]{2,})/gi,
   // 'office [at] school [dot] uk' — split @ and one of the dots
   /([a-zA-Z0-9._%+\-]+)\s*[\[({]\s*at\s*[\])}]\s*([a-zA-Z0-9\-]+)\s*[\[({]\s*dot\s*[\])}]\s*([a-zA-Z]{2,})/gi,
 ];

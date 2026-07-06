@@ -39,8 +39,13 @@ export default async function CalendarPage({
   const params = await searchParams;
   const { year, month } = parseMonth(params.month);
 
-  const startOfMonth = new Date(year, month - 1, 1);
-  const endOfMonth = new Date(year, month, 0, 23, 59, 59);
+  // Query a day beyond each month edge: the range is computed in the
+  // server's timezone (UTC) but the grid buckets events in the viewer's
+  // local time, so a UK event at 00:30 on the 1st is stored in the
+  // previous UTC month and would otherwise vanish from both months. The
+  // grid simply ignores events whose local day falls outside its cells.
+  const startOfMonth = new Date(year, month - 1, 0);
+  const endOfMonth = new Date(year, month, 1, 23, 59, 59);
 
   const [events, brands] = await Promise.all([
     listCalendarEvents(startOfMonth, endOfMonth),

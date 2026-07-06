@@ -88,11 +88,15 @@ export async function getCompletedCaseStudies(args: {
 
   const q = args.search?.trim();
   if (q) {
-    // Escape PostgREST ilike wildcards so a typed % doesn't break the search.
-    const safe = q.replace(/[%_,]/g, (c) => `\\${c}`);
-    query = query.or(
-      `customer_name.ilike.%${safe}%,drive_folder_name.ilike.%${safe}%,so_number.ilike.%${safe}%`,
-    );
+    // Escape ilike wildcards; commas/parens are PostgREST or-tree syntax
+    // and can't be backslash-escaped, so strip them ('Smith, Jones' still
+    // matches via the remaining words).
+    const safe = q.replace(/[,()]/g, ' ').replace(/[%_]/g, (c) => `\\${c}`).trim();
+    if (safe) {
+      query = query.or(
+        `customer_name.ilike.%${safe}%,drive_folder_name.ilike.%${safe}%,so_number.ilike.%${safe}%`,
+      );
+    }
   }
 
   query = query
@@ -253,7 +257,8 @@ export async function draftCopyForCaseStudy(id: string): Promise<void> {
 
 // Wipe a case study from MARK and trash its Drive folder. Removes processed
 // photos from Supabase Storage, deletes the case_studies row (which cascades
-// to case_study_photos and social_posts via FK), and trashes the Drive folder
+// to case_study_photos via FK), explicitly deletes linked social_posts
+// (their source_id has no FK, so no cascade), and trashes the Drive folder
 // (which cascades to all contents). Wix items are NOT touched — use the
 // existing Reset Wix link button first if you also want the live item gone.
 export async function deleteByDriveFolderId(driveFolderId: string): Promise<{
@@ -287,6 +292,17 @@ export async function deleteByDriveFolderId(driveFolderId: string): Promise<{
         // path and keep going. Worst case is a few orphaned blobs.
         console.warn('Failed to remove some storage objects:', rm.error.message);
       }
+    }
+    // social_posts.source_id has no foreign key, so nothing cascades —
+    // delete the generated posts explicitly or they orphan with a Source
+    // link pointing at a 404.
+    const delPosts = await supabase
+      .from('social_posts')
+      .delete()
+      .eq('source_type', 'case-study')
+      .eq('source_id', existing.id);
+    if (delPosts.error) {
+      console.warn('Failed to delete linked social posts:', delPosts.error.message);
     }
     const del = await supabase.from('case_studies').delete().eq('id', existing.id);
     if (del.error) throw new Error(`Failed to delete case study row: ${del.error.message}`);

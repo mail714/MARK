@@ -3,6 +3,11 @@
 -- (one per platform configured for that brand), linked by source_type/source_id
 -- so the originating case study or email is traceable.
 
+-- 0001 created an early social_posts with an incompatible shape that was
+-- never used in production. Drop it so this migration runs on a fresh
+-- database instead of aborting on 'relation already exists'.
+drop table if exists social_posts cascade;
+
 create table social_posts (
   id uuid primary key default gen_random_uuid(),
   brand_id uuid references brands(id),

@@ -171,10 +171,21 @@ export async function listProspects(filters: ProspectListFilters = {}): Promise<
   const limit = filters.limit ?? 100;
   const offset = filters.offset ?? 0;
 
+  // Brand / status filters must run server-side, BEFORE pagination —
+  // filtering the fetched page in JS silently hides matches beyond the
+  // page boundary and reports the unfiltered count as the total. An inner
+  // join on the assignments embed pushes the condition into the query;
+  // 'unassigned' filters on the left-joined embed being empty.
+  const wantsAssignmentJoin =
+    (!!filters.brandId || !!filters.status) && filters.status !== 'unassigned';
+  const assignmentsEmbed = wantsAssignmentJoin
+    ? 'prospect_brand_assignments!inner(*)'
+    : 'prospect_brand_assignments(*)';
+
   let query = supabase
     .from('prospects')
     .select(
-      '*, prospect_brand_assignments(*), prospect_searches!inner(search_id)',
+      `*, ${assignmentsEmbed}, prospect_searches!inner(search_id)`,
       { count: 'exact' },
     )
     .order('first_found_at', { ascending: false })
@@ -183,14 +194,27 @@ export async function listProspects(filters: ProspectListFilters = {}): Promise<
   if (filters.searchId) {
     query = query.eq('prospect_searches.search_id', filters.searchId);
   }
+  if (filters.brandId && filters.status !== 'unassigned') {
+    query = query.eq('prospect_brand_assignments.brand_id', filters.brandId);
+  }
+  if (filters.status && filters.status !== 'unassigned') {
+    query = query.eq('prospect_brand_assignments.status', filters.status);
+  }
+  if (filters.status === 'unassigned') {
+    query = query.is('prospect_brand_assignments', null);
+  }
   if (filters.withEmail) {
     query = query.not('emails', 'eq', '{}');
   }
   if (filters.search) {
-    const safe = filters.search.replace(/[%_,]/g, (c) => `\\${c}`);
-    query = query.or(
-      `business_name.ilike.%${safe}%,website_domain.ilike.%${safe}%,postcode.ilike.%${safe}%`,
-    );
+    // Commas and parens are PostgREST or-tree syntax and can't be
+    // backslash-escaped — strip them from the needle instead of 500ing.
+    const safe = filters.search.replace(/[,()]/g, ' ').replace(/[%_]/g, (c) => `\\${c}`).trim();
+    if (safe) {
+      query = query.or(
+        `business_name.ilike.%${safe}%,website_domain.ilike.%${safe}%,postcode.ilike.%${safe}%`,
+      );
+    }
   }
 
   const { data, error, count } = await query;
@@ -203,8 +227,8 @@ export async function listProspects(filters: ProspectListFilters = {}): Promise<
     assignments: p.prospect_brand_assignments ?? [],
   }));
 
-  // Brand / status filters apply after fetch — assignments are 1:N per
-  // prospect and PostgREST can't filter on them cleanly inside the parent row.
+  // Belt-and-braces re-check in JS (cheap, and keeps behaviour identical
+  // if the embedded filter semantics ever shift under a PostgREST upgrade).
   if (filters.brandId) {
     items = items.filter((p) => p.assignments.some((a) => a.brand_id === filters.brandId));
   }
@@ -271,6 +295,52 @@ export async function bulkAssignProspects(
     .from('prospect_brand_assignments')
     .upsert(rows, { onConflict: 'prospect_id,brand_id' });
   if (error) throw new Error(`Failed to bulk-assign: ${error.message}`);
+}
+
+// Assignment step for automated bulk pushes. Unlike bulkAssignProspects
+// (the operator's explicit Assign button, which overwrites), this only
+// CREATES missing assignments and never touches existing rows — a
+// prospect the operator marked 'skipped' must stay skipped, and one
+// already 'pushed' mustn't regress to 'approved'. Returns the ids whose
+// assignment for this brand is 'skipped' so callers exclude them from
+// the push entirely.
+export async function ensureAssignmentsForPush(
+  ids: string[],
+  args: { brand_id: string; sector: string | null },
+): Promise<Set<string>> {
+  const skipped = new Set<string>();
+  if (ids.length === 0) return skipped;
+  const supabase = createAdminClient();
+
+  const existing = new Set<string>();
+  for (let i = 0; i < ids.length; i += 200) {
+    const chunk = ids.slice(i, i + 200);
+    const { data, error } = await supabase
+      .from('prospect_brand_assignments')
+      .select('prospect_id, status')
+      .in('prospect_id', chunk)
+      .eq('brand_id', args.brand_id);
+    if (error) throw new Error(`Failed to load assignments: ${error.message}`);
+    for (const r of (data ?? []) as { prospect_id: string; status: string }[]) {
+      existing.add(r.prospect_id);
+      if (r.status === 'skipped') skipped.add(r.prospect_id);
+    }
+  }
+
+  const missing = ids.filter((id) => !existing.has(id));
+  for (let i = 0; i < missing.length; i += 500) {
+    const rows = missing.slice(i, i + 500).map((id) => ({
+      prospect_id: id,
+      brand_id: args.brand_id,
+      sector: args.sector,
+      status: 'approved' as const,
+    }));
+    const { error } = await supabase
+      .from('prospect_brand_assignments')
+      .upsert(rows, { onConflict: 'prospect_id,brand_id', ignoreDuplicates: true });
+    if (error) throw new Error(`Failed to assign prospects: ${error.message}`);
+  }
+  return skipped;
 }
 
 export async function listSuppressions(): Promise<ProspectSuppression[]> {

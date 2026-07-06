@@ -17,6 +17,7 @@ type Props = {
   selectedUrl: string | null;
   selectedAlt: string | null;
   defaultSector: string | null;
+  brandId: string | null;
 };
 
 function thumbnail(url: string): string {
@@ -24,7 +25,7 @@ function thumbnail(url: string): string {
   return `${url}/v1/fill/w_400,h_300,al_c,q_80/image.jpg`;
 }
 
-export function HeroImagePicker({ campaignId, selectedUrl, selectedAlt, defaultSector }: Props) {
+export function HeroImagePicker({ campaignId, selectedUrl, selectedAlt, defaultSector, brandId }: Props) {
   const router = useRouter();
   const dialogRef = useRef<HTMLDialogElement>(null);
   const [images, setImages] = useState<Image[] | null>(null);
@@ -40,6 +41,11 @@ export function HeroImagePicker({ campaignId, selectedUrl, selectedAlt, defaultS
     try {
       const params = new URLSearchParams();
       if (sectorFilter) params.set('sector', sectorFilter);
+      // Scope to the campaign's brand (a Signet campaign shouldn't be
+      // offered Honours Boards imagery) and raise the page size — the
+      // default 60 silently hid most of the library.
+      if (brandId) params.set('brand_id', brandId);
+      params.set('page_size', '500');
       const res = await fetch(`/api/emails/images?${params.toString()}`);
       if (!res.ok) throw new Error(`Load failed (${res.status})`);
       const data = await res.json();

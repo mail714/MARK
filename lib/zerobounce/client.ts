@@ -67,7 +67,12 @@ type SingleResponse = {
   status: EmailStatus;
   sub_status?: string;
   did_you_mean?: string;
+  error?: string;
 };
+
+const KNOWN_STATUSES = new Set<EmailStatus>([
+  'valid', 'invalid', 'catch-all', 'unknown', 'spamtrap', 'abuse', 'do_not_mail',
+]);
 
 export async function verifyEmail(email: string): Promise<EmailStatus> {
   const url = new URL(SINGLE_URL);
@@ -82,7 +87,20 @@ export async function verifyEmail(email: string): Promise<EmailStatus> {
     );
   }
   const data = (await res.json()) as SingleResponse;
-  return data.status ?? 'unknown';
+  // ZeroBounce reports bad-key / out-of-credits as HTTP 200 with an
+  // `error` body and no status. Treating that as a verdict would poison
+  // email_statuses with fake 'unknown' (= pushable) results that never
+  // get re-verified — so it must throw, loudly.
+  if (data.error) {
+    throw new ZeroBounceError(`ZeroBounce: ${data.error}`, 200);
+  }
+  if (!data.status || !KNOWN_STATUSES.has(data.status)) {
+    throw new ZeroBounceError(
+      `ZeroBounce returned unrecognised status '${data.status ?? '(none)'}' for ${email}`,
+      200,
+    );
+  }
+  return data.status;
 }
 
 // ZeroBounce's bulk endpoint (bulkapi.zerobounce.net) requires an
@@ -92,14 +110,20 @@ export async function verifyEmail(email: string): Promise<EmailStatus> {
 // 1000-requests-per-minute limit.
 const CONCURRENCY = 8;
 
-export async function verifyEmailsBatch(
-  emails: string[],
-): Promise<Map<string, EmailStatus>> {
-  const out = new Map<string, EmailStatus>();
+export type BatchVerifyResult = {
+  statuses: Map<string, EmailStatus>;
+  // Emails that errored (rate limit, transient 5xx, credit exhaustion).
+  // Callers must surface these — a short map with no error looks exactly
+  // like 'those emails were fine', which they weren't.
+  failedCount: number;
+  firstError: Error | null;
+};
+
+export async function verifyEmailsBatch(emails: string[]): Promise<BatchVerifyResult> {
+  const out: BatchVerifyResult = { statuses: new Map(), failedCount: 0, firstError: null };
   if (emails.length === 0) return out;
 
   let cursor = 0;
-  let firstError: Error | null = null;
 
   const workers = Array.from(
     { length: Math.min(CONCURRENCY, emails.length) },
@@ -110,13 +134,13 @@ export async function verifyEmailsBatch(
         const email = emails[idx];
         try {
           const status = await verifyEmail(email);
-          out.set(email.toLowerCase(), status);
+          out.statuses.set(email.toLowerCase(), status);
         } catch (err) {
-          // Capture the first failure but keep processing the rest — a
-          // single bad email shouldn't abort the whole batch. Caller
-          // surfaces the error message via the bulk-job progress card.
-          if (!firstError) {
-            firstError = err instanceof Error ? err : new Error(String(err));
+          // Keep processing the rest — a single bad email shouldn't abort
+          // the whole batch — but count and report every failure.
+          out.failedCount += 1;
+          if (!out.firstError) {
+            out.firstError = err instanceof Error ? err : new Error(String(err));
           }
         }
       }
@@ -124,11 +148,11 @@ export async function verifyEmailsBatch(
   );
   await Promise.all(workers);
 
-  if (firstError && out.size === 0) {
-    // Every single request failed — usually means the key or endpoint is
-    // wrong. Surface that clearly instead of silently returning an empty
-    // map that looks like 'no emails were verifiable'.
-    throw firstError;
+  if (out.firstError && out.statuses.size === 0) {
+    // Every single request failed — usually means the key is wrong or the
+    // account is out of credits. Surface that clearly instead of returning
+    // an empty map that looks like 'no emails were verifiable'.
+    throw out.firstError;
   }
   return out;
 }

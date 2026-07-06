@@ -98,12 +98,18 @@ export function ProspectsReview({
     setSelected(next);
   }
 
+  // Operates on membership of the *currently filtered* rows only — a
+  // selection carried over from another filter must not be silently
+  // cleared (or worse, silently kept and acted on invisibly).
   function toggleAll() {
-    if (selected.size >= filtered.length && filtered.length > 0) {
-      setSelected(new Set());
+    const next = new Set(selected);
+    const allIn = filtered.length > 0 && filtered.every((p) => next.has(p.id));
+    if (allIn) {
+      for (const p of filtered) next.delete(p.id);
     } else {
-      setSelected(new Set(filtered.map((p) => p.id)));
+      for (const p of filtered) next.add(p.id);
     }
+    setSelected(next);
   }
 
   // 'Select all' on a paginated search: the header checkbox selects the

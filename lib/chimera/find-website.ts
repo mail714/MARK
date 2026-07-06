@@ -96,10 +96,16 @@ export async function findWebsiteForProspect(
       confidence,
     };
 
-    // Keep the strongest match across the candidates we inspect.
+    // Keep the strongest match across the candidates we inspect. On a
+    // confidence tie, one WITH a website beats one without — duplicate
+    // Google listings often differ only in that, and the whole point of
+    // this lookup is coming away with a URL.
     if (
       !best ||
-      rankConfidence(candidate.confidence) > rankConfidence(best.confidence)
+      rankConfidence(candidate.confidence) > rankConfidence(best.confidence) ||
+      (rankConfidence(candidate.confidence) === rankConfidence(best.confidence) &&
+        !!candidate.website &&
+        !best.website)
     ) {
       best = candidate;
     }

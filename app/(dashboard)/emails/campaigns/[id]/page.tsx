@@ -114,6 +114,7 @@ export default async function CampaignDetailPage({
           selectedUrl={campaign.hero_image_url}
           selectedAlt={campaign.hero_image_alt}
           defaultSector={campaign.sector}
+          brandId={campaign.brand_id}
         />
       </section>
 

@@ -139,15 +139,22 @@ export async function pushProspectsToBook(args: {
     }
 
     if (sent > 0) {
+      // Upsert, not update: a plain UPDATE is a silent no-op when the
+      // prospect was never assigned to this brand (small selection pushes
+      // don't pre-assign), leaving pushed contacts with no 'pushed' record
+      // — which breaks idempotent re-push skipping later.
       await supabase
         .from('prospect_brand_assignments')
-        .update({
-          status: 'pushed',
-          pushed_to_dotdigital_book_id: args.addressBookId,
-          pushed_at: now,
-        })
-        .eq('prospect_id', p.id)
-        .eq('brand_id', args.brandId);
+        .upsert(
+          {
+            prospect_id: p.id,
+            brand_id: args.brandId,
+            status: 'pushed',
+            pushed_to_dotdigital_book_id: args.addressBookId,
+            pushed_at: now,
+          },
+          { onConflict: 'prospect_id,brand_id' },
+        );
       out.pushed += 1;
       out.contactsPushed += sent;
       // Some contacts landed but a later one hard-failed — surface it

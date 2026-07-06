@@ -6,14 +6,14 @@ type FromAddress = {
   isCustomFromAddress?: boolean;
 };
 
-// dotdigital has shifted from-addresses around their endpoint tree between
-// API versions. We try the known paths in order so the integration
-// survives their renames without code changes. The first 200 wins.
+// The documented endpoint is /v2/custom-from-addresses
+// (developer.dotdigital.com/reference/get-custom-from-addresses). The
+// legacy guesses stay as fallbacks in case an older account tree still
+// answers on one of them. The first 200 wins.
 const FROM_ADDRESS_PATHS = [
+  '/v2/custom-from-addresses',
   '/v2/account-info/from-addresses',
   '/v2/email/from-addresses',
-  '/v2/email/fromaddresses',
-  '/v2/account/from-addresses',
 ];
 
 export async function listFromAddresses(): Promise<FromAddress[]> {

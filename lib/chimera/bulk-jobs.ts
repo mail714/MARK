@@ -63,6 +63,7 @@ export async function updateBulkJob(
     Pick<
       BulkJob,
       | 'status'
+      | 'total'
       | 'processed'
       | 'succeeded'
       | 'failed'
@@ -79,20 +80,22 @@ export async function updateBulkJob(
   if (error) throw new Error(`Failed to update bulk job: ${error.message}`);
 }
 
-// Idempotent recovery: if the most-recent job of a kind is stuck in
-// 'running' for too long (worker died), flip it to failed. Polled by the
-// UI on first load so the page doesn't show a phantom in-progress state
-// indefinitely.
-export async function reapZombieJobs(thresholdMs = 5 * 60 * 1000): Promise<void> {
+// Idempotent recovery: flip genuinely dead jobs to failed. Liveness is
+// judged on updated_at, NOT started_at — workers flush progress every
+// ~1.5s (and the set_updated_at trigger stamps every write), so a healthy
+// job's updated_at is always fresh no matter how long it's been running.
+// A big push or rescan legitimately runs for 20+ minutes; only a job
+// whose row has gone silent is a zombie.
+export async function reapZombieJobs(thresholdMs = 10 * 60 * 1000): Promise<void> {
   const supabase = createAdminClient();
   const cutoff = new Date(Date.now() - thresholdMs).toISOString();
   await supabase
     .from('bulk_jobs')
     .update({
       status: 'failed',
-      last_error: 'Worker died before completing (likely a timeout or OOM).',
+      last_error: 'Worker died before completing (likely a server restart mid-job).',
       finished_at: new Date().toISOString(),
     })
     .eq('status', 'running')
-    .lt('started_at', cutoff);
+    .lt('updated_at', cutoff);
 }

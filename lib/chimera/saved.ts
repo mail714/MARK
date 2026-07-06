@@ -1,6 +1,6 @@
 import { createAdminClient } from '@/lib/supabase/admin';
 import { pushProspectsToBook } from './dotdigital-push';
-import { bulkAssignProspects } from './prospects';
+import { ensureAssignmentsForPush } from './prospects';
 
 export type SavedSearch = {
   id: string;
@@ -116,36 +116,50 @@ export async function pushSavedSearchToBook(
 
   const supabase = createAdminClient();
 
-  // 1. Every prospect from the latest run.
-  const { data: links, error: linksErr } = await supabase
-    .from('prospect_searches')
-    .select('prospect_id')
-    .eq('search_id', saved.last_run_search_id);
-  if (linksErr) throw new Error(`Failed to load run prospects: ${linksErr.message}`);
-  const prospectIds = (links ?? []).map((r) => (r as { prospect_id: string }).prospect_id);
+  // 1. Every prospect from the latest run — paged, because PostgREST caps
+  // a single response at 1,000 rows and big sweeps exceed that (an
+  // unpaged read would silently sync only the first thousand).
+  const prospectIds: string[] = [];
+  for (let from = 0; ; from += 1000) {
+    const { data: links, error: linksErr } = await supabase
+      .from('prospect_searches')
+      .select('prospect_id')
+      .eq('search_id', saved.last_run_search_id)
+      .range(from, from + 999);
+    if (linksErr) throw new Error(`Failed to load run prospects: ${linksErr.message}`);
+    const rows = (links ?? []) as { prospect_id: string }[];
+    prospectIds.push(...rows.map((r) => r.prospect_id));
+    if (rows.length < 1000) break;
+  }
   if (prospectIds.length === 0) return { pushed: 0, skipped: 0, failed: 0, assigned: 0 };
 
-  // 2. Assign every prospect to the brand+sector for this saved search.
-  // Idempotent — if they're already assigned, the upsert is a no-op.
-  await bulkAssignProspects(prospectIds, {
+  // 2. Create missing brand assignments without overwriting existing ones,
+  // and respect prospects the operator marked Skip for this brand.
+  const skippedByOperator = await ensureAssignmentsForPush(prospectIds, {
     brand_id: saved.brand_id,
     sector: saved.sector,
-    status: 'approved',
   });
-  const assigned = prospectIds.length;
+  const assigned = prospectIds.length - skippedByOperator.size;
 
-  // 3. Filter out prospects already pushed to this exact book.
-  const { data: existingPushes } = await supabase
-    .from('prospect_brand_assignments')
-    .select('prospect_id, pushed_to_dotdigital_book_id')
-    .in('prospect_id', prospectIds)
-    .eq('brand_id', saved.brand_id)
-    .eq('pushed_to_dotdigital_book_id', saved.dotdigital_book_id);
-  const alreadyPushed = new Set(
-    (existingPushes ?? []).map((r) => (r as { prospect_id: string }).prospect_id),
+  // 3. Filter out prospects already pushed to this exact book (chunked —
+  // .in() with 1,500 uuids overruns URL limits) plus operator skips.
+  const alreadyPushed = new Set<string>();
+  for (let i = 0; i < prospectIds.length; i += 200) {
+    const chunk = prospectIds.slice(i, i + 200);
+    const { data: existingPushes } = await supabase
+      .from('prospect_brand_assignments')
+      .select('prospect_id')
+      .in('prospect_id', chunk)
+      .eq('brand_id', saved.brand_id)
+      .eq('pushed_to_dotdigital_book_id', saved.dotdigital_book_id);
+    for (const r of (existingPushes ?? []) as { prospect_id: string }[]) {
+      alreadyPushed.add(r.prospect_id);
+    }
+  }
+  const toPush = prospectIds.filter(
+    (id) => !alreadyPushed.has(id) && !skippedByOperator.has(id),
   );
-  const toPush = prospectIds.filter((id) => !alreadyPushed.has(id));
-  const skipped = alreadyPushed.size;
+  const skipped = alreadyPushed.size + skippedByOperator.size;
 
   if (toPush.length === 0) {
     return { pushed: 0, skipped, failed: 0, assigned };

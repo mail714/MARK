@@ -2,6 +2,7 @@
 
 import { useRouter } from 'next/navigation';
 import { useState, useTransition } from 'react';
+import { toLocalInputValue } from '@/lib/datetime-local';
 import type { SocialPost } from '@/lib/social/posts';
 
 type Props = {
@@ -14,10 +15,11 @@ export function SocialPostEditor({ post }: Props) {
   const [hashtags, setHashtags] = useState(post.hashtags.join(' '));
   const [ctaUrl, setCtaUrl] = useState(post.cta_url ?? '');
   const [shotBrief, setShotBrief] = useState(post.shot_brief ?? '');
+  // Local-time formatting is load-bearing: toISOString() renders UTC,
+  // which the save path re-parses as local — shifting the publish time an
+  // hour on every blur during BST.
   const [plannedAt, setPlannedAt] = useState(
-    post.planned_publish_at
-      ? new Date(post.planned_publish_at).toISOString().slice(0, 16)
-      : '',
+    post.planned_publish_at ? toLocalInputValue(post.planned_publish_at) : '',
   );
   const [savingField, setSavingField] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);

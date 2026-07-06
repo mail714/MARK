@@ -48,7 +48,7 @@ export async function fetchViaScrapingBee(
 
   const controller = new AbortController();
   const timeoutMs = opts.timeoutMs ?? 120_000;
-  const timer = setTimeout(() => controller.abort('client-side timeout'), timeoutMs);
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const res = await fetch(`${BASE_URL}?${params.toString()}`, {
       signal: controller.signal,
@@ -103,7 +103,7 @@ export async function searchGoogleViaScrapingBee(
 
   const controller = new AbortController();
   const timeoutMs = opts.timeoutMs ?? 60_000;
-  const timer = setTimeout(() => controller.abort('client-side timeout'), timeoutMs);
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const res = await fetch(`${BASE_URL}store/google?${params.toString()}`, {
       signal: controller.signal,

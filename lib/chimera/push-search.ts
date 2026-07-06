@@ -1,7 +1,7 @@
 import { createAdminClient } from '@/lib/supabase/admin';
 import { createBulkJob, updateBulkJob, type BulkJob } from './bulk-jobs';
 import { pushProspectsToBook } from './dotdigital-push';
-import { bulkAssignProspects } from './prospects';
+import { ensureAssignmentsForPush } from './prospects';
 
 // Search-wide push: every with-email prospect linked to a search goes to
 // the dotdigital book, regardless of which 500-row page it sits on. Runs
@@ -134,20 +134,26 @@ async function runSearchPush(
   const errors: BulkJob['errors'] = [];
 
   try {
-    // Make sure every prospect is assigned to the brand so the push can
-    // mark it 'pushed' (mirrors the saved-segment sync flow).
-    for (let i = 0; i < prospectIds.length; i += 500) {
-      await bulkAssignProspects(prospectIds.slice(i, i + 500), {
-        brand_id: args.brandId,
-        sector: args.sector ?? null,
-        status: 'approved',
+    // Create missing brand assignments without touching existing rows,
+    // and drop prospects the operator explicitly marked 'skipped' for
+    // this brand — an automated push must never override that decision.
+    const skippedByOperator = await ensureAssignmentsForPush(prospectIds, {
+      brand_id: args.brandId,
+      sector: args.sector ?? null,
+    });
+    const targets = prospectIds.filter((id) => !skippedByOperator.has(id));
+    if (skippedByOperator.size > 0) {
+      processed += skippedByOperator.size;
+      errors.push({
+        id: 'operator-skipped',
+        reason: `${skippedByOperator.size} prospects marked Skip for this brand were not pushed`,
       });
     }
 
     // Push in small chunks so progress ticks and one bad batch can't take
     // down the whole run.
-    for (let i = 0; i < prospectIds.length; i += 25) {
-      const chunk = prospectIds.slice(i, i + 25);
+    for (let i = 0; i < targets.length; i += 25) {
+      const chunk = targets.slice(i, i + 25);
       try {
         const result = await pushProspectsToBook({
           prospectIds: chunk,

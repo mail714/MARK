@@ -81,13 +81,28 @@ async function runEmailVerification(jobId: string, prospectIds: string[]): Promi
       }
     }
 
+    // The job was created with a rough total (every email on every
+    // prospect); now we know the real workload — unique, not-yet-verified
+    // emails — correct it so the progress bar can actually reach 100%.
+    await updateBulkJob(jobId, { total: unique.length });
+
     // Hit ZeroBounce in batches of 100.
     const allStatuses = new Map<string, EmailStatus>();
     for (let i = 0; i < unique.length; i += 100) {
       const chunk = unique.slice(i, i + 100);
       try {
-        const statuses = await verifyEmailsBatch(chunk);
-        statuses.forEach((v, k) => allStatuses.set(k, v));
+        const result = await verifyEmailsBatch(chunk);
+        result.statuses.forEach((v, k) => allStatuses.set(k, v));
+        // Partial failures (rate limit, credits, transient 5xx) must be
+        // visible — a completed job with silently-missing verdicts reads
+        // as 'those emails were fine'.
+        if (result.failedCount > 0) {
+          failed += result.failedCount;
+          errors.push({
+            id: `batch-${i}`,
+            reason: `${result.failedCount} emails failed to verify — ${result.firstError?.message ?? 'unknown error'}`,
+          });
+        }
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         errors.push({ id: `batch-${i}`, reason: message });

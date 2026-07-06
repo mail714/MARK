@@ -22,6 +22,7 @@ import {
   loadExistingProspectsByPlaceId,
 } from './prospects';
 import { enrichSearchWithCompaniesHouse } from './sources/companies-house';
+import { PLACE_CATEGORIES } from '@/components/chimera/place-categories';
 import { createAdminClient } from '@/lib/supabase/admin';
 
 const WEBSITE_WORKER_CONCURRENCY = 6;
@@ -53,13 +54,19 @@ export async function runGooglePlacesSearch(searchId: string): Promise<void> {
     );
     await updateSearch(searchId, { grid_cells_total: grid.length });
 
-    // 2. Run the grid scan — collect unique places
+    // 2. Run the grid scan — collect unique places. The category is only
+    // a Google place *type* when it's one of the curated preset values;
+    // anything else (custom keywords, single-word or not) must go as
+    // `keyword` — an unknown value in `type` returns wrong/empty results.
+    const isKnownType = PLACE_CATEGORIES.some(
+      (c) => c.mode === 'grid' && c.type !== null && c.type === search.category,
+    );
     const found: NearbyResult[] = [];
     await searchGrid({
       grid,
       radiusM: search.grid_radius_m ?? 1500,
-      type: search.category,
-      keyword: search.category && /\s/.test(search.category) ? search.category : null,
+      type: isKnownType ? search.category : null,
+      keyword: !isKnownType && search.category ? search.category : null,
       maxResults: search.max_results ?? 500,
       onNewResult: (r) => {
         found.push(r);
@@ -207,19 +214,30 @@ export async function runEstateSweepSearch(searchId: string): Promise<void> {
     // either enrich an existing prospect or insert as 'companies-house'.
     if (search.pull_companies_house) {
       const supabase = createAdminClient();
-      const { data: rows } = await supabase
-        .from('prospects')
-        .select('postcode')
-        .in('id', await (async () => {
-          const { data } = await supabase
-            .from('prospect_searches')
-            .select('prospect_id')
-            .eq('search_id', searchId);
-          return ((data ?? []) as { prospect_id: string }[]).map((r) => r.prospect_id);
-        })());
-      const postcodes = ((rows ?? []) as { postcode: string | null }[])
-        .map((r) => r.postcode)
-        .filter((p): p is string => !!p);
+      // Paged link read (PostgREST caps responses at 1,000 rows) and
+      // chunked .in() (1,500 uuids overruns URL limits) — big sweeps
+      // used to silently skip this whole stage otherwise.
+      const linkedIds: string[] = [];
+      for (let from = 0; ; from += 1000) {
+        const { data } = await supabase
+          .from('prospect_searches')
+          .select('prospect_id')
+          .eq('search_id', searchId)
+          .range(from, from + 999);
+        const links = (data ?? []) as { prospect_id: string }[];
+        linkedIds.push(...links.map((r) => r.prospect_id));
+        if (links.length < 1000) break;
+      }
+      const postcodes: string[] = [];
+      for (let i = 0; i < linkedIds.length; i += 200) {
+        const { data: rows } = await supabase
+          .from('prospects')
+          .select('postcode')
+          .in('id', linkedIds.slice(i, i + 200));
+        for (const r of (rows ?? []) as { postcode: string | null }[]) {
+          if (r.postcode) postcodes.push(r.postcode);
+        }
+      }
       try {
         await enrichSearchWithCompaniesHouse(searchId, postcodes);
         // Re-tally found counter since CH may have added new rows.

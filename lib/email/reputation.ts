@@ -201,6 +201,18 @@ async function checkOne(domain: string, list: { name: string; suffix: string }):
         error: 'lookup error response (127.0.0.255) — query couldn\'t be checked',
       };
     }
+    // 127.0.0.1 is never a listing code — real listings start at
+    // 127.0.0.2. URIBL in particular answers 127.0.0.1 for 'query
+    // refused: your resolver is a public/cloud one', which is exactly
+    // what a Render host uses. Treat it as inconclusive, not listed.
+    if (first === '127.0.0.1') {
+      return {
+        list: list.name,
+        listed: false,
+        result: first,
+        error: `query refused by ${list.name} (127.0.0.1 — public-resolver block)`,
+      };
+    }
     return {
       list: list.name,
       listed: true,

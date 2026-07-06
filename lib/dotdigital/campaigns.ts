@@ -30,6 +30,8 @@ export async function createDotdigitalCampaign(
     htmlContent: params.htmlContent,
     plainTextContent: params.plainTextContent,
     isHtml: true,
-    replyAction: 'Webhook',
+    // Valid enum values are Unset | WebMailForward | Webmail | Delete —
+    // anything else gets the whole create-campaign call rejected.
+    replyAction: 'Unset',
   });
 }

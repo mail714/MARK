@@ -22,10 +22,18 @@ export async function listAllDataFieldNames(): Promise<Set<string>> {
         if (f.name) names.add(f.name.toUpperCase());
       }
     }
-  } catch {
-    // If the endpoint is unreachable, we still return the standard field
-    // set — the push will only send well-known fields and skip any
-    // account-specific extras.
+  } catch (err) {
+    // Auth failures mean the whole push is about to fail anyway — surface
+    // them instead of silently degrading every contact to FIRSTNAME-only.
+    const status = (err as { statusCode?: number }).statusCode;
+    if (status === 401 || status === 403) throw err;
+    // Anything else (5xx, network): fall back to the standard field set —
+    // the push still works, just without account-specific extras — but
+    // leave a trace so the omission is diagnosable.
+    console.warn(
+      'dotdigital /v2/data-fields unavailable — pushing with standard fields only:',
+      err instanceof Error ? err.message : err,
+    );
   }
   return names;
 }

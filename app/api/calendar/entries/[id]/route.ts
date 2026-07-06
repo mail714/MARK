@@ -50,6 +50,9 @@ export async function PATCH(req: Request, ctx: Ctx) {
       }
       patch.status = body.status as CalendarEntryStatus;
     }
+    if (Object.keys(patch).length === 0) {
+      return NextResponse.json({ error: 'No editable fields supplied' }, { status: 400 });
+    }
     await updateCalendarEntry(id, patch);
     return NextResponse.json({ ok: true });
   } catch (err) {

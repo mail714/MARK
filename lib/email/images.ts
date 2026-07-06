@@ -54,10 +54,14 @@ export async function listEmailImages(filter?: {
   if (filter?.brandId) q = q.eq('brand_id', filter.brandId);
   if (filter?.sector) q = q.eq('sector', filter.sector);
   if (filter?.search) {
-    const safe = filter.search.replace(/[%_,]/g, (c) => `\\${c}`);
-    q = q.or(
-      `alt_text.ilike.%${safe}%,description.ilike.%${safe}%,customer_name.ilike.%${safe}%`,
-    );
+    // Commas/parens are PostgREST or-tree syntax and can't be
+    // backslash-escaped — strip them rather than 500 on 'school, cricket'.
+    const safe = filter.search.replace(/[,()]/g, ' ').replace(/[%_]/g, (c) => `\\${c}`).trim();
+    if (safe) {
+      q = q.or(
+        `alt_text.ilike.%${safe}%,description.ilike.%${safe}%,customer_name.ilike.%${safe}%`,
+      );
+    }
   }
   q = q.range(from, to);
 
