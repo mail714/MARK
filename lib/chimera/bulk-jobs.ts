@@ -2,6 +2,8 @@ import { createAdminClient } from '@/lib/supabase/admin';
 
 export type BulkJobKind =
   | 'rescan-website'
+  | 'deep-scan-website'
+  | 'google-email-hunt'
   | 'apollo-enrich'
   | 'push-to-dotdigital'
   | 'repair-websites'

@@ -1,5 +1,7 @@
 import { NextResponse } from 'next/server';
-import { startWebsiteRescan } from '@/lib/chimera/rescan-website';
+import { startWebsiteRescan, type RescanMode } from '@/lib/chimera/rescan-website';
+
+const MODES = new Set<RescanMode>(['scrape', 'deep-scan', 'google']);
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -18,8 +20,12 @@ export async function POST(req: Request) {
   if (ids.length === 0) {
     return NextResponse.json({ error: 'prospect_ids[] is required' }, { status: 400 });
   }
+  const mode: RescanMode =
+    typeof body.mode === 'string' && MODES.has(body.mode as RescanMode)
+      ? (body.mode as RescanMode)
+      : 'scrape';
   try {
-    const jobId = await startWebsiteRescan(ids);
+    const jobId = await startWebsiteRescan(ids, mode);
     return NextResponse.json({ ok: true, job_id: jobId });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

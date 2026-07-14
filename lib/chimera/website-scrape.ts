@@ -249,7 +249,15 @@ export type FetchPageResult = {
 // is set. ScrapingBee uses a real Chromium on residential IPs so it gets
 // past both the IP-blocking and JS-rendering problems that small UK hosts
 // commonly throw up.
-export async function fetchPageWithSource(url: string): Promise<FetchPageResult> {
+// allowScrapingBee=false keeps the whole fetch cascade on free direct
+// requests — used by the plain Rescan button so the operator controls
+// exactly when paid credits get spent (the Deep scan button re-enables it).
+export type ScrapeOptions = { allowScrapingBee?: boolean };
+
+export async function fetchPageWithSource(
+  url: string,
+  opts: ScrapeOptions = {},
+): Promise<FetchPageResult> {
   const result: FetchPageResult = {
     html: null,
     finalUrl: null,
@@ -296,7 +304,7 @@ export async function fetchPageWithSource(url: string): Promise<FetchPageResult>
   }
 
   // 2. ScrapingBee fallback
-  if (isScrapingBeeConfigured()) {
+  if ((opts.allowScrapingBee ?? true) && isScrapingBeeConfigured()) {
     try {
       const html = await fetchViaScrapingBee(url, { renderJs: true });
       if (html && html.length > 0) {
@@ -326,8 +334,8 @@ export async function fetchPageWithSource(url: string): Promise<FetchPageResult>
   return result;
 }
 
-async function fetchPage(url: string): Promise<string | null> {
-  return (await fetchPageWithSource(url)).html;
+async function fetchPage(url: string, opts: ScrapeOptions = {}): Promise<string | null> {
+  return (await fetchPageWithSource(url, opts)).html;
 }
 
 // Anchor tag with capturing groups for attributes and inner text.
@@ -435,6 +443,7 @@ export type WebsiteEnrichment = {
 
 export async function scrapeWebsiteForEmailsAndAddress(
   websiteUrl: string,
+  opts: ScrapeOptions = {},
 ): Promise<WebsiteEnrichment> {
   const empty: WebsiteEnrichment = { emails: [], address: { street: null, city: null, postcode: null } };
   // Schools often have URLs like 'www.example.co.uk' without a scheme in
@@ -457,7 +466,7 @@ export async function scrapeWebsiteForEmailsAndAddress(
   // .org.uk → futuralearning.co.uk/schools/two-rivers/). Without the
   // redirected URL, findContactLinks would filter out same-page contact
   // links as 'different origin'.
-  const homeResult = await fetchPageWithSource(websiteUrl);
+  const homeResult = await fetchPageWithSource(websiteUrl, opts);
   const home = homeResult.html;
   const effectiveUrl = homeResult.finalUrl ?? websiteUrl;
   if (home) {
@@ -483,7 +492,7 @@ export async function scrapeWebsiteForEmailsAndAddress(
     if (emails.size > 0 && address.postcode) break;
     if (seen.has(url)) continue;
     seen.add(url);
-    const html = await fetchPage(url);
+    const html = await fetchPage(url, opts);
     if (!html) continue;
     if (emails.size === 0) {
       for (const e of extractEmailsFromHtml(html)) emails.add(e);
@@ -501,7 +510,12 @@ export async function scrapeWebsiteForEmailsAndAddress(
   // Only fires when direct fetch was already successful — schools whose
   // direct fetch failed at the network layer have already been served by
   // ScrapingBee inside fetchPageWithSource.
-  if (emails.size === 0 && homeResult.source === 'direct' && isScrapingBeeConfigured()) {
+  if (
+    emails.size === 0 &&
+    homeResult.source === 'direct' &&
+    (opts.allowScrapingBee ?? true) &&
+    isScrapingBeeConfigured()
+  ) {
     try {
       const rendered = await fetchViaScrapingBee(websiteUrl, { renderJs: true });
       if (rendered && rendered.length > 0) {

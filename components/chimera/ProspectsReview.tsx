@@ -228,9 +228,12 @@ export function ProspectsReview({
     }
   }
 
-  async function rescanWebsites() {
+  // One endpoint, three explicit modes — each button spells out what it
+  // does and what it costs. The server auto-filters the selection to the
+  // prospects each mode can actually help.
+  async function rescanWebsites(mode: 'scrape' | 'deep-scan' | 'google') {
     if (selected.size === 0) {
-      setError('Select prospects to rescan first.');
+      setError('Select prospects first.');
       return;
     }
     setBusy(true);
@@ -240,10 +243,10 @@ export function ProspectsReview({
       const res = await fetch('/api/chimera/prospects/rescan-website', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ prospect_ids: [...selected] }),
+        body: JSON.stringify({ prospect_ids: [...selected], mode }),
       });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error ?? `Rescan failed (${res.status})`);
+      if (!res.ok) throw new Error(data.error ?? `Job failed to start (${res.status})`);
       // Background job — flip the UI into 'show progress' mode and the
       // BulkJobProgress card takes over from here, polling status.
       if (data.job_id) {
@@ -251,7 +254,7 @@ export function ProspectsReview({
         // back to idle via onDone, which the parent listens to below.
         setCurrentJobId(data.job_id as string);
       } else {
-        setMessage('Rescan started.');
+        setMessage('Job started.');
         setBusy(false);
       }
     } catch (err) {
@@ -479,12 +482,30 @@ export function ProspectsReview({
         <div className="sm:col-span-3 flex flex-wrap items-end gap-2">
           <button
             type="button"
-            onClick={rescanWebsites}
+            onClick={() => rescanWebsites('scrape')}
             disabled={busy || selected.size === 0}
             className="rounded-md border border-blue-300 bg-white px-3 py-1.5 text-xs font-medium text-blue-700 hover:bg-blue-50 disabled:opacity-50"
-            title="Re-visit each selected prospect's website and extract emails. Falls back to ScrapingBee when the host blocks us, and to a Google search ('business name + email') when the website gives nothing or the prospect has no website."
+            title="FREE — re-visit each selected prospect's website with plain fetches (homepage + its contact page) and extract emails. Skips prospects without a website."
           >
             Rescan websites ({selected.size})
+          </button>
+          <button
+            type="button"
+            onClick={() => rescanWebsites('deep-scan')}
+            disabled={busy || selected.size === 0}
+            className="rounded-md border border-violet-300 bg-white px-3 py-1.5 text-xs font-medium text-violet-700 hover:bg-violet-50 disabled:opacity-50"
+            title="PAID (ScrapingBee credits) — re-scrape via residential IPs with JavaScript rendering, for sites that block us or only show their email client-side. Only runs on selected prospects that have a website but no email yet."
+          >
+            Deep scan ({selected.size})
+          </button>
+          <button
+            type="button"
+            onClick={() => rescanWebsites('google')}
+            disabled={busy || selected.size === 0}
+            className="rounded-md border border-teal-300 bg-white px-3 py-1.5 text-xs font-medium text-teal-700 hover:bg-teal-50 disabled:opacity-50"
+            title="PAID (ScrapingBee credits, ~1 search per business) — Google '&quot;Business Name&quot; postcode email' and extract the address from the results. Only runs on selected prospects with no email at all."
+          >
+            Google email hunt ({selected.size})
           </button>
           <button
             type="button"
@@ -551,13 +572,17 @@ export function ProspectsReview({
             const kindLabel =
               job.kind === 'rescan-website'
                 ? 'Website rescan'
-                : job.kind === 'apollo-enrich'
-                  ? 'Apollo enrich'
-                  : job.kind === 'repair-websites'
-                    ? 'Website repair'
-                    : job.kind === 'verify-emails'
-                      ? 'Email verification'
-                      : 'dotdigital push';
+                : job.kind === 'deep-scan-website'
+                  ? 'Deep scan'
+                  : job.kind === 'google-email-hunt'
+                    ? 'Google email hunt'
+                    : job.kind === 'apollo-enrich'
+                      ? 'Apollo enrich'
+                      : job.kind === 'repair-websites'
+                        ? 'Website repair'
+                        : job.kind === 'verify-emails'
+                          ? 'Email verification'
+                          : 'dotdigital push';
             const meta = job.metadata as
               | {
                   suggestions?: number;

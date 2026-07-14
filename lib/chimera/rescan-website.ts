@@ -5,25 +5,49 @@ import { isScrapingBeeConfigured } from '@/lib/scrapingbee/client';
 import { createBulkJob, updateBulkJob, type BulkJob } from './bulk-jobs';
 import { recountSearchCounters } from './recount';
 
-// Starts a rescan as a background job. Creates a bulk_jobs row in
-// 'running' state, kicks off the work via setImmediate (so the HTTP route
-// returns under a second), and gives the caller a job_id the UI can poll
-// for live progress.
-export async function startWebsiteRescan(prospectIds: string[]): Promise<string> {
+// Three distinct email-finding jobs sharing one runner, exposed as
+// separate buttons so it's always clear what's being paid for:
+//   'scrape'    — free: re-visit each prospect's website with plain
+//                 fetches (homepage + its own nav's contact page)
+//   'deep-scan' — paid ScrapingBee credits: same scrape but via
+//                 residential-IP fetches with JS rendering, for hosts
+//                 that block us or only render their email client-side
+//   'google'    — paid ScrapingBee credits: search Google for
+//                 '"Business Name" <postcode> email', for prospects with
+//                 no email at all
+export type RescanMode = 'scrape' | 'deep-scan' | 'google';
+
+const KIND_BY_MODE = {
+  scrape: 'rescan-website',
+  'deep-scan': 'deep-scan-website',
+  google: 'google-email-hunt',
+} as const;
+
+// Starts the job in the background. Creates a bulk_jobs row in 'running'
+// state, kicks off the work via setImmediate (so the HTTP route returns
+// under a second), and gives the caller a job_id the UI can poll.
+export async function startWebsiteRescan(
+  prospectIds: string[],
+  mode: RescanMode = 'scrape',
+): Promise<string> {
   const jobId = await createBulkJob({
-    kind: 'rescan-website',
+    kind: KIND_BY_MODE[mode],
     total: prospectIds.length,
-    metadata: { prospect_ids: prospectIds },
+    metadata: { prospect_ids: prospectIds, mode },
   });
   setImmediate(() => {
-    runWebsiteRescan(jobId, prospectIds).catch((err) => {
-      console.error('rescan-website job failed', jobId, err);
+    runWebsiteRescan(jobId, prospectIds, mode).catch((err) => {
+      console.error(`${mode} email job failed`, jobId, err);
     });
   });
   return jobId;
 }
 
-async function runWebsiteRescan(jobId: string, prospectIds: string[]): Promise<void> {
+async function runWebsiteRescan(
+  jobId: string,
+  prospectIds: string[],
+  mode: RescanMode,
+): Promise<void> {
   const supabase = createAdminClient();
   try {
     const { data: prospects, error } = await supabase
@@ -40,9 +64,18 @@ async function runWebsiteRescan(jobId: string, prospectIds: string[]): Promise<v
       postcode: string | null;
       address: string | null;
     };
-    // No-website prospects are included: the scrape step is skipped for
-    // them but the Google email hunt below can still find an address.
-    const rows = (prospects ?? []) as Row[];
+    // Each mode auto-filters the selection to the prospects it can help:
+    // scraping needs a website; the paid modes only run where they can
+    // add value (deep scan: website but no email yet; Google hunt: no
+    // email at all) so credits are never spent on businesses that already
+    // have an address.
+    const all = (prospects ?? []) as Row[];
+    const rows =
+      mode === 'scrape'
+        ? all.filter((p) => !!p.website)
+        : mode === 'deep-scan'
+          ? all.filter((p) => !!p.website && (p.emails?.length ?? 0) === 0)
+          : all.filter((p) => (p.emails?.length ?? 0) === 0);
 
     let processed = 0;
     let succeeded = 0;
@@ -75,9 +108,14 @@ async function runWebsiteRescan(jobId: string, prospectIds: string[]): Promise<v
         let added = 0;
         let failure: string | null = null;
 
-        if (p.website) {
+        if ((mode === 'scrape' || mode === 'deep-scan') && p.website) {
           try {
-            const enrichment = await scrapeWebsiteForEmailsAndAddress(p.website);
+            // Plain rescan stays on free direct fetches; deep scan allows
+            // the paid ScrapingBee layer (blocked-host fallback + JS
+            // rendering) through the whole cascade.
+            const enrichment = await scrapeWebsiteForEmailsAndAddress(p.website, {
+              allowScrapingBee: mode === 'deep-scan',
+            });
             for (const e of enrichment.emails) {
               if (!before.has(e)) {
                 merged.push(e);
@@ -89,31 +127,32 @@ async function runWebsiteRescan(jobId: string, prospectIds: string[]): Promise<v
             failure = err instanceof Error ? err.message : String(err);
           }
         }
+        if (mode === 'deep-scan' && !isScrapingBeeConfigured() && !failure) {
+          failure = 'SCRAPINGBEE_API_KEY is not set — deep scan needs it';
+        }
 
-        // Google fallback — only when the prospect still has no email at
-        // all after the scrape (or has no website to scrape). Searches
-        // '"Business Name" <postcode> email' via ScrapingBee and extracts
-        // from the snippets / top result pages.
-        if (merged.length === 0 && isScrapingBeeConfigured()) {
-          try {
-            const hunt = await huntEmailsViaGoogle({
-              businessName: p.business_name,
-              locationHint: p.postcode ?? p.address,
-              websiteDomain: domainOf(p.website),
-            });
-            for (const e of hunt.emails) {
-              if (!before.has(e)) {
-                merged.push(e);
-                before.add(e);
-                added += 1;
+        // Google hunt mode: search '"Business Name" <postcode> email' via
+        // ScrapingBee and extract from the snippets / top result pages.
+        if (mode === 'google') {
+          if (!isScrapingBeeConfigured()) {
+            failure = 'SCRAPINGBEE_API_KEY is not set — the Google hunt needs it';
+          } else {
+            try {
+              const hunt = await huntEmailsViaGoogle({
+                businessName: p.business_name,
+                locationHint: p.postcode ?? p.address,
+                websiteDomain: domainOf(p.website),
+              });
+              for (const e of hunt.emails) {
+                if (!before.has(e)) {
+                  merged.push(e);
+                  before.add(e);
+                  added += 1;
+                }
               }
+            } catch (err) {
+              failure = err instanceof Error ? err.message : String(err);
             }
-            // The hunt rescued a prospect whose site scrape failed — that
-            // shouldn't count as a failure in the summary.
-            if (added > 0) failure = null;
-          } catch (err) {
-            const message = err instanceof Error ? err.message : String(err);
-            if (!failure) failure = `Google email hunt: ${message}`;
           }
         }
 

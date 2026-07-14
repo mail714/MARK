@@ -6,6 +6,8 @@ import type { BulkJob } from '@/lib/chimera/bulk-jobs';
 
 const KIND_LABEL: Record<string, string> = {
   'rescan-website': 'Rescanning websites',
+  'deep-scan-website': 'Deep scanning websites (ScrapingBee)',
+  'google-email-hunt': 'Hunting emails via Google',
   'apollo-enrich': 'Enriching with Apollo',
   'push-to-dotdigital': 'Pushing to dotdigital',
   'repair-websites': 'Repairing websites',
