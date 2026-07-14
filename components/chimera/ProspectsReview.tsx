@@ -503,7 +503,7 @@ export function ProspectsReview({
             onClick={() => rescanWebsites('google')}
             disabled={busy || selected.size === 0}
             className="rounded-md border border-teal-300 bg-white px-3 py-1.5 text-xs font-medium text-teal-700 hover:bg-teal-50 disabled:opacity-50"
-            title="PAID (ScrapingBee credits, ~1 search per business) — Google '&quot;Business Name&quot; postcode email' and extract the address from the results. Only runs on selected prospects with no email at all."
+            title="PAID (ScrapingBee credits, 1–2 searches per business) — Google '&quot;Business Name&quot; postcode email' and extract the email from the results. For prospects with no website, it also identifies and saves the company's own site, then scrapes it for free. Only runs on selected prospects with no email at all."
           >
             Google email hunt ({selected.size})
           </button>
@@ -590,6 +590,7 @@ export function ProspectsReview({
                   valid?: number;
                   invalid?: number;
                   unknown?: number;
+                  websites_found?: number;
                 }
               | null
               | undefined;
@@ -598,7 +599,9 @@ export function ProspectsReview({
                 ? `${meta?.suggestions ? `, ${meta.suggestions} lower-confidence suggestions to review` : ''}${meta?.no_match ? `, ${meta.no_match} no match` : ''}`
                 : job.kind === 'verify-emails'
                   ? ` — ${meta?.valid ?? 0} valid, ${meta?.invalid ?? 0} invalid, ${meta?.unknown ?? 0} unknown`
-                  : '';
+                  : job.kind === 'google-email-hunt' && meta?.websites_found
+                    ? `, ${meta.websites_found} websites found`
+                    : '';
             const succeededLabel =
               job.kind === 'repair-websites'
                 ? 'auto-updated'

@@ -81,6 +81,7 @@ async function runWebsiteRescan(
     let succeeded = 0;
     let failed = 0;
     let emailsAdded = 0;
+    let websitesFound = 0;
     const errors: BulkJob['errors'] = [];
     let lastFlush = Date.now();
 
@@ -131,8 +132,11 @@ async function runWebsiteRescan(
           failure = 'SCRAPINGBEE_API_KEY is not set — deep scan needs it';
         }
 
-        // Google hunt mode: search '"Business Name" <postcode> email' via
-        // ScrapingBee and extract from the snippets / top result pages.
+        // Google hunt mode: search Google via ScrapingBee for the email
+        // AND, when the prospect has no website, the company's own site.
+        // A found site gets saved and immediately scraped (free direct
+        // fetches, contact-page following included) for more emails.
+        let foundWebsite: string | null = null;
         if (mode === 'google') {
           if (!isScrapingBeeConfigured()) {
             failure = 'SCRAPINGBEE_API_KEY is not set — the Google hunt needs it';
@@ -150,22 +154,52 @@ async function runWebsiteRescan(
                   added += 1;
                 }
               }
+              if (!p.website && hunt.website) {
+                foundWebsite = hunt.website;
+                if (merged.length === 0) {
+                  try {
+                    const enrichment = await scrapeWebsiteForEmailsAndAddress(foundWebsite, {
+                      allowScrapingBee: false,
+                    });
+                    for (const e of enrichment.emails) {
+                      if (!before.has(e)) {
+                        merged.push(e);
+                        before.add(e);
+                        added += 1;
+                      }
+                    }
+                  } catch {
+                    // The website is still worth saving even if its scrape
+                    // fails — the operator can deep-scan it next.
+                  }
+                }
+              }
             } catch (err) {
               failure = err instanceof Error ? err.message : String(err);
             }
           }
         }
 
-        if (added > 0) {
+        if (added > 0 || foundWebsite) {
           const { error: updateErr } = await supabase
             .from('prospects')
-            .update({ emails: merged })
+            .update({
+              emails: merged,
+              ...(foundWebsite
+                ? {
+                    website: foundWebsite,
+                    website_domain: domainOf(foundWebsite),
+                    address_note: 'Website found via Google email hunt',
+                  }
+                : {}),
+            })
             .eq('id', p.id);
           if (updateErr) {
             errors.push({ id: p.id, reason: updateErr.message });
             failed += 1;
           } else {
             emailsAdded += added;
+            if (foundWebsite) websitesFound += 1;
             succeeded += 1;
           }
         } else if (failure) {
@@ -200,6 +234,7 @@ async function runWebsiteRescan(
       emails_added: emailsAdded,
       errors: errors.slice(0, 20),
       finished_at: new Date().toISOString(),
+      metadata: { prospect_ids: prospectIds, mode, websites_found: websitesFound },
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

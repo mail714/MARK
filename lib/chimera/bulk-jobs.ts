@@ -74,6 +74,7 @@ export async function updateBulkJob(
       | 'last_error'
       | 'errors'
       | 'finished_at'
+      | 'metadata'
     >
   >,
 ): Promise<void> {
