@@ -59,10 +59,11 @@ function pick(rec, exact, fuzzy) {
 function toRow(rec) {
   const status = pick(rec, ['charity_registration_status'], /registration.?status/i);
   // Skip removed / non-registered charities.
-  if (status && !/register/i.test(status)) return null;
-  // The extract has one row per linked charity; 0 is the main registration.
-  const linked = pick(rec, ['linked_charity_number'], /linked.?charity.?number/i);
-  if (linked && linked !== '0') return null;
+  if (status && !/^registered$/i.test(status.trim())) return null;
+  // NOTE: do NOT filter by linked_charity_number. Individual churches are
+  // frequently registered as *linked* charities (linked number 1, 2, 3…)
+  // under a parent registration — e.g. "HITCHAM FREE CHURCH" is linked
+  // number 2. Dropping non-zero linked numbers would bin most churches.
 
   const name = pick(rec, ['charity_name'], /charity.?name|^name$/i);
   if (!name || !CHURCH_RE.test(name)) return null;
@@ -84,6 +85,10 @@ function toRow(rec) {
     phone: pick(rec, ['charity_contact_phone'], /phone|telephone/i),
     email: pick(rec, ['charity_contact_email'], /email/i),
     website: pick(rec, ['charity_contact_web'], /web|url|site/i),
+    // Unique entity id for de-duplication — safe even when postcode is
+    // blank (many linked-church rows are), unlike a name+postcode key
+    // which would collapse every blank-postcode "St Mary's Church" into one.
+    _key: `${pick(rec, ['registered_charity_number'], /registered.?charity.?number/i)}-${pick(rec, ['linked_charity_number'], /linked.?charity.?number/i)}`,
   };
 }
 
@@ -103,9 +108,8 @@ function emit(rec) {
   scanned++;
   const row = toRow(rec);
   if (!row) return;
-  const key = `${row.name.toLowerCase()}|${row.postcode.toLowerCase()}`;
-  if (seen.has(key)) return;
-  seen.add(key);
+  if (seen.has(row._key)) return;
+  seen.add(row._key);
   kept++;
   out.write(
     [row.name, row.address, row.postcode, row.phone, row.email, row.website]
