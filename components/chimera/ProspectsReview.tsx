@@ -529,11 +529,11 @@ export function ProspectsReview({
             value={pushLimit}
             onChange={(e) => setPushLimit(parseInt(e.target.value, 10))}
             className="rounded-md border border-neutral-300 bg-white px-2 py-1.5 text-xs text-neutral-700"
-            title="How many of each company's emails to push. More contacts improves the odds of reaching the buyer, but the same campaign lands multiple times at one organisation."
+            title="How many of each company's emails become separate dotdigital contacts. 'Every email' maximises the chance of reaching whoever handles signage, but the same campaign lands in several inboxes at one company — only addresses verification has flagged as invalid/spam-trap/do-not-mail are ever excluded."
           >
             <option value={1}>1 email / company (safest)</option>
             <option value={2}>Top 2 emails / company</option>
-            <option value={99}>All pushable emails</option>
+            <option value={99}>Every email / company (max reach)</option>
           </select>
           <button
             type="button"
