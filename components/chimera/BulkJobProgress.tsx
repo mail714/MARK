@@ -10,6 +10,7 @@ const KIND_LABEL: Record<string, string> = {
   'google-email-hunt': 'Hunting emails via Google',
   'apollo-enrich': 'Enriching with Apollo',
   'push-to-dotdigital': 'Pushing to dotdigital',
+  'bulk-import-dotdigital': 'Bulk-importing to dotdigital',
   'repair-websites': 'Repairing websites',
   'verify-emails': 'Verifying emails',
 };

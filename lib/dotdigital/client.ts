@@ -27,6 +27,20 @@ function urlFor(path: string): string {
   return `${trimmed}${suffix}`;
 }
 
+// Exposed for the bulk-import uploader, which sends multipart/form-data and
+// so can't use request() (that forces application/json). It reuses the
+// base URL and Basic-auth token but lets fetch set the multipart boundary.
+export function dotdigitalUrlFor(path: string): string {
+  return urlFor(path);
+}
+export function dotdigitalBasicAuth(): string {
+  const user = process.env.DOTDIGITAL_API_USER;
+  const password = process.env.DOTDIGITAL_API_PASSWORD;
+  if (!user) throw new Error('DOTDIGITAL_API_USER is not set');
+  if (!password) throw new Error('DOTDIGITAL_API_PASSWORD is not set');
+  return `Basic ${Buffer.from(`${user}:${password}`).toString('base64')}`;
+}
+
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 // dotdigital enforces a per-second/per-hour API limit and answers 429 when

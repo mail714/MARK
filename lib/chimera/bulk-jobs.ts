@@ -6,6 +6,7 @@ export type BulkJobKind =
   | 'google-email-hunt'
   | 'apollo-enrich'
   | 'push-to-dotdigital'
+  | 'bulk-import-dotdigital'
   | 'repair-websites'
   | 'verify-emails';
 export type BulkJobStatus = 'running' | 'completed' | 'failed';

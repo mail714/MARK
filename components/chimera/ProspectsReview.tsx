@@ -320,7 +320,7 @@ export function ProspectsReview({
     const approx = searchWithEmail ? `~${searchWithEmail.toLocaleString('en-GB')} ` : '';
     if (
       !window.confirm(
-        `Push ${approx}with-email prospects from this ENTIRE search (all pages) to "${bookName}"? Companies already pushed to this book are skipped, and only verified-pushable emails are sent.`,
+        `Bulk-import ${approx}with-email prospects from this ENTIRE search (all pages) to "${bookName}"? This uploads them to dotdigital in batches (rate-limit-proof). Companies already pushed to this book are skipped, and only verified-pushable emails are sent.`,
       )
     ) {
       return;
@@ -329,7 +329,7 @@ export function ProspectsReview({
     setError(null);
     setMessage(null);
     try {
-      const res = await fetch(`/api/chimera/searches/${searchId}/push`, {
+      const res = await fetch(`/api/chimera/searches/${searchId}/bulk-import`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
@@ -342,7 +342,7 @@ export function ProspectsReview({
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error ?? `Push failed (${res.status})`);
       if (typeof data.already_pushed === 'number' && data.already_pushed > 0) {
-        setMessage(`${data.already_pushed} already in this book — pushing the remaining ${data.to_push}.`);
+        setMessage(`${data.already_pushed} already in this book — importing the remaining ${data.to_import}.`);
       }
       setCurrentJobId(data.job_id as string);
     } catch (err) {
@@ -548,7 +548,7 @@ export function ProspectsReview({
               type="button"
               onClick={pushWholeSearch}
               disabled={busy || !pushBookId}
-              title="Push every with-email prospect in this search — all pages, not just the ones shown or selected. Runs in the background; already-pushed companies are skipped."
+              title="Bulk-import every with-email prospect in this search — all pages, not just the ones shown or selected. Uploads to dotdigital in batches so it can't hit the rate limit; already-pushed companies are skipped. Best for large lists."
               className="rounded-md border border-neutral-900 bg-white px-3 py-1.5 text-xs font-medium text-neutral-900 hover:bg-neutral-100 disabled:opacity-50"
             >
               Push whole search{searchWithEmail ? ` (${searchWithEmail.toLocaleString('en-GB')})` : ''}
@@ -582,7 +582,9 @@ export function ProspectsReview({
                         ? 'Website repair'
                         : job.kind === 'verify-emails'
                           ? 'Email verification'
-                          : 'dotdigital push';
+                          : job.kind === 'bulk-import-dotdigital'
+                            ? 'dotdigital bulk import'
+                            : 'dotdigital push';
             const meta = job.metadata as
               | {
                   suggestions?: number;

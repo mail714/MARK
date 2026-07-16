@@ -9,7 +9,7 @@ import { ensureAssignmentsForPush } from './prospects';
 // HTTP request. Prospects already pushed to this exact book for this
 // brand are skipped up front so re-running is idempotent.
 
-async function listWithEmailProspectIds(
+export async function listWithEmailProspectIds(
   supabase: ReturnType<typeof createAdminClient>,
   searchId: string,
 ): Promise<string[]> {
@@ -40,7 +40,7 @@ async function listWithEmailProspectIds(
   return withEmail;
 }
 
-async function listAlreadyPushed(
+export async function listAlreadyPushed(
   supabase: ReturnType<typeof createAdminClient>,
   prospectIds: string[],
   brandId: string,
