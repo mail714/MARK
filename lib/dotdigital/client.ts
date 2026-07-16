@@ -27,35 +27,59 @@ function urlFor(path: string): string {
   return `${trimmed}${suffix}`;
 }
 
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+// dotdigital enforces a per-second/per-hour API limit and answers 429 when
+// you exceed it. A burst push of hundreds of contacts will hit it, so we
+// wait and retry rather than treating a 429 (or a transient 503) as a real
+// failure. Honours the Retry-After header when present, else backs off
+// exponentially. Only after exhausting retries does it throw.
+const MAX_RETRIES = 6;
+
 async function request<T>(
   method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE',
   path: string,
   body?: unknown,
 ): Promise<T> {
-  const res = await fetch(urlFor(path), {
-    method,
-    headers: authHeaders(),
-    body: body !== undefined ? JSON.stringify(body) : undefined,
-    cache: 'no-store',
-  });
-  const text = await res.text();
-  let parsed: unknown = null;
-  if (text) {
-    try {
-      parsed = JSON.parse(text);
-    } catch {
-      parsed = text;
+  for (let attempt = 0; ; attempt++) {
+    const res = await fetch(urlFor(path), {
+      method,
+      headers: authHeaders(),
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+      cache: 'no-store',
+    });
+
+    if ((res.status === 429 || res.status === 503) && attempt < MAX_RETRIES) {
+      const retryAfter = Number(res.headers.get('retry-after'));
+      // Retry-After is in seconds; fall back to exponential backoff
+      // (1s, 2s, 4s, 8s, 16s, 32s) capped at 60s.
+      const waitMs = Number.isFinite(retryAfter) && retryAfter > 0
+        ? retryAfter * 1000
+        : Math.min(60_000, 1000 * 2 ** attempt);
+      await res.body?.cancel().catch(() => {});
+      await sleep(waitMs);
+      continue;
     }
+
+    const text = await res.text();
+    let parsed: unknown = null;
+    if (text) {
+      try {
+        parsed = JSON.parse(text);
+      } catch {
+        parsed = text;
+      }
+    }
+    if (!res.ok) {
+      const message =
+        (parsed && typeof parsed === 'object' && 'message' in parsed
+          ? String((parsed as { message: unknown }).message)
+          : '') || `dotdigital ${method} ${path} failed (${res.status})`;
+      const err: DotdigitalError = { statusCode: res.status, message, body: parsed };
+      throw Object.assign(new Error(message), err);
+    }
+    return parsed as T;
   }
-  if (!res.ok) {
-    const message =
-      (parsed && typeof parsed === 'object' && 'message' in parsed
-        ? String((parsed as { message: unknown }).message)
-        : '') || `dotdigital ${method} ${path} failed (${res.status})`;
-    const err: DotdigitalError = { statusCode: res.status, message, body: parsed };
-    throw Object.assign(new Error(message), err);
-  }
-  return parsed as T;
 }
 
 export const dotdigital = {

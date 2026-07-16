@@ -16,6 +16,8 @@ type DotdigitalContact = {
   dataFields?: Array<{ key: string; value: string }>;
 };
 
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
 async function pushOne(addressBookId: number, contact: DotdigitalContact): Promise<{ id: number }> {
   return await dotdigital.post<{ id: number }>(
     `/v2/address-books/${addressBookId}/contacts`,
@@ -172,6 +174,12 @@ export async function pushProspectsToBook(args: {
         reason: 'Suppressed in dotdigital (previously unsubscribed or bounced)',
       });
     }
+
+    // Gentle pacing between contacts so a large push doesn't machine-gun
+    // dotdigital into a per-second rate limit. The client also backs off
+    // and retries on a 429, but spacing avoids provoking it in the first
+    // place. Only paces when a contact was actually sent.
+    if (sent > 0) await sleep(120);
   }
 
   return out;
