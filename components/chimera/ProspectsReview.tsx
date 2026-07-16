@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import type {
   Prospect,
@@ -46,7 +46,24 @@ export function ProspectsReview({
   const [message, setMessage] = useState<string | null>(null);
   const [currentJobId, setCurrentJobId] = useState<string | null>(null);
   const [pushBookId, setPushBookId] = useState<number | null>(addressBooks[0]?.dotdigital_id ?? null);
-  const [pushLimit, setPushLimit] = useState<number>(1);
+  // Emails-per-company preference. Defaults to 'Every email' (max reach)
+  // and remembers the operator's last choice across sessions. Starts at the
+  // default on first render (server + client) to avoid a hydration mismatch,
+  // then the effect below loads any saved preference after mount.
+  const [pushLimit, setPushLimit] = useState<number>(99);
+  useEffect(() => {
+    const saved = Number(window.localStorage.getItem('chimera_push_limit'));
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- one-time load of the persisted preference after mount, hydration-safe
+    if (saved === 1 || saved === 2 || saved === 99) setPushLimit(saved);
+  }, []);
+  function changePushLimit(value: number) {
+    setPushLimit(value);
+    try {
+      window.localStorage.setItem('chimera_push_limit', String(value));
+    } catch {
+      // private-mode / storage-disabled — preference just won't persist
+    }
+  }
   const [filter, setFilter] = useState<
     'all' | 'with-email' | 'no-email' | 'pushable' | 'blocked' | 'unverified'
   >('all');
@@ -527,7 +544,7 @@ export function ProspectsReview({
           </button>
           <select
             value={pushLimit}
-            onChange={(e) => setPushLimit(parseInt(e.target.value, 10))}
+            onChange={(e) => changePushLimit(parseInt(e.target.value, 10))}
             className="rounded-md border border-neutral-300 bg-white px-2 py-1.5 text-xs text-neutral-700"
             title="How many of each company's emails become separate dotdigital contacts. 'Every email' maximises the chance of reaching whoever handles signage, but the same campaign lands in several inboxes at one company — only addresses verification has flagged as invalid/spam-trap/do-not-mail are ever excluded."
           >
