@@ -591,6 +591,7 @@ export function ProspectsReview({
                   invalid?: number;
                   unknown?: number;
                   websites_found?: number;
+                  skipped?: number;
                 }
               | null
               | undefined;
@@ -601,7 +602,9 @@ export function ProspectsReview({
                   ? ` — ${meta?.valid ?? 0} valid, ${meta?.invalid ?? 0} invalid, ${meta?.unknown ?? 0} unknown`
                   : job.kind === 'google-email-hunt' && meta?.websites_found
                     ? `, ${meta.websites_found} websites found`
-                    : '';
+                    : job.kind === 'push-to-dotdigital' && meta?.skipped
+                      ? `, ${meta.skipped} skipped (no pushable email)`
+                      : '';
             const succeededLabel =
               job.kind === 'repair-websites'
                 ? 'auto-updated'
@@ -611,10 +614,10 @@ export function ProspectsReview({
             setMessage(
               `${kindLabel} ${job.status} — ${job.succeeded} ${succeededLabel}${job.emails_added ? `, +${job.emails_added} emails` : ''}${job.contacts_added ? `, +${job.contacts_added} contacts` : ''}${extra}${job.failed ? `, ${job.failed} failed` : ''}.`,
             );
-            // Surface the first error so we know what the ESP / verifier
-            // is complaining about instead of just seeing 'X failed'.
+            // Surface the real rejection reason (push jobs now put the most
+            // common dotdigital failure here, not a skip message).
             if (job.failed > 0 && job.last_error) {
-              setError(`First error: ${job.last_error}`);
+              setError(`Reason: ${job.last_error}`);
             }
           }}
         />

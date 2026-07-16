@@ -130,8 +130,29 @@ async function runSearchPush(
   let processed = 0;
   let succeeded = 0;
   let failed = 0;
+  let skipped = 0;
   let contactsAdded = 0;
   const errors: BulkJob['errors'] = [];
+  // Tally distinct FAILURE reasons (dotdigital rejections) separately from
+  // our own skip messages, so the surfaced error is the real cause and not
+  // whichever skipped prospect happened to be processed first.
+  const failureReasons = new Map<string, number>();
+  const SKIP_PREFIXES = [
+    'No email on prospect',
+    'All emails marked',
+    'Suppressed in dotdigital',
+    'prospects marked Skip',
+  ];
+  const isSkip = (reason: string) => SKIP_PREFIXES.some((p) => reason.startsWith(p));
+  const noteFailure = (reason: string) => {
+    failureReasons.set(reason, (failureReasons.get(reason) ?? 0) + 1);
+  };
+  const topFailure = () => {
+    let best: string | null = null;
+    let n = 0;
+    for (const [r, c] of failureReasons) if (c > n) { best = r; n = c; }
+    return best ? `${best}${n > 1 ? ` (×${n})` : ''}` : null;
+  };
 
   try {
     // Create missing brand assignments without touching existing rows,
@@ -163,13 +184,20 @@ async function runSearchPush(
         });
         succeeded += result.pushed;
         failed += result.failed;
+        skipped += result.skipped;
         contactsAdded += result.contactsPushed;
         for (const e of result.errors) {
-          if (errors.length < 20) errors.push({ id: e.prospectId, reason: e.reason });
+          if (isSkip(e.reason)) {
+            if (errors.length < 20) errors.push({ id: e.prospectId, reason: e.reason });
+          } else {
+            noteFailure(e.reason);
+            if (errors.length < 20) errors.push({ id: e.prospectId, reason: e.reason });
+          }
         }
       } catch (err) {
         failed += chunk.length;
         const message = err instanceof Error ? err.message : String(err);
+        noteFailure(message);
         if (errors.length < 20) errors.push({ id: `chunk-${i}`, reason: message });
       }
       processed += chunk.length;
@@ -179,7 +207,8 @@ async function runSearchPush(
         failed,
         contacts_added: contactsAdded,
         errors,
-        last_error: errors[0]?.reason ?? null,
+        // Surface the most common real rejection, not a skip message.
+        last_error: topFailure() ?? errors[0]?.reason ?? null,
       });
     }
 
@@ -190,8 +219,14 @@ async function runSearchPush(
       failed,
       contacts_added: contactsAdded,
       errors,
-      last_error: errors[0]?.reason ?? null,
+      last_error: topFailure() ?? errors[0]?.reason ?? null,
       finished_at: new Date().toISOString(),
+      metadata: {
+        skipped,
+        failed,
+        succeeded,
+        top_failure: topFailure(),
+      },
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
