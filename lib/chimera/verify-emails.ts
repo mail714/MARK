@@ -5,15 +5,17 @@ import { verifyEmailsBatch, type EmailStatus } from '@/lib/zerobounce/client';
 export async function startEmailVerification(prospectIds: string[]): Promise<string> {
   const supabase = createAdminClient();
   // Count the total emails to be verified so the progress bar is meaningful.
-  const { data } = await supabase
-    .from('prospects')
-    .select('emails')
-    .in('id', prospectIds);
-  const totalEmails =
-    ((data ?? []) as { emails: string[] }[]).reduce(
-      (n, r) => n + (r.emails?.length ?? 0),
-      0,
-    );
+  // Chunked so a big select-all list can't overrun the request URL.
+  let totalEmails = 0;
+  for (let i = 0; i < prospectIds.length; i += 200) {
+    const { data } = await supabase
+      .from('prospects')
+      .select('emails')
+      .in('id', prospectIds.slice(i, i + 200));
+    for (const r of (data ?? []) as { emails: string[] }[]) {
+      totalEmails += r.emails?.length ?? 0;
+    }
+  }
 
   const jobId = await createBulkJob({
     kind: 'verify-emails',
@@ -52,18 +54,22 @@ async function runEmailVerification(jobId: string, prospectIds: string[]): Promi
   };
 
   try {
-    const { data: prospects, error } = await supabase
-      .from('prospects')
-      .select('id, emails, email_statuses')
-      .in('id', prospectIds);
-    if (error) throw new Error(`Failed to load prospects: ${error.message}`);
-
     type Row = {
       id: string;
       emails: string[];
       email_statuses: Record<string, EmailStatus>;
     };
-    const rows = (prospects ?? []) as Row[];
+    // Chunked — a single .in() with a large select-all id list overruns
+    // the request URL limit and fails the whole job.
+    const rows: Row[] = [];
+    for (let i = 0; i < prospectIds.length; i += 200) {
+      const { data, error } = await supabase
+        .from('prospects')
+        .select('id, emails, email_statuses')
+        .in('id', prospectIds.slice(i, i + 200));
+      if (error) throw new Error(`Failed to load prospects: ${error.message}`);
+      rows.push(...((data ?? []) as Row[]));
+    }
 
     // De-duplicate emails across prospects so we only spend one credit per
     // unique email even when several schools share an info@trust.org.uk.

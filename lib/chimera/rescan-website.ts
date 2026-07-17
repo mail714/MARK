@@ -56,12 +56,6 @@ async function runWebsiteRescan(
 ): Promise<void> {
   const supabase = createAdminClient();
   try {
-    const { data: prospects, error } = await supabase
-      .from('prospects')
-      .select('id, business_name, website, emails, postcode, address')
-      .in('id', prospectIds);
-    if (error) throw new Error(`Failed to load prospects: ${error.message}`);
-
     type Row = {
       id: string;
       business_name: string;
@@ -70,12 +64,25 @@ async function runWebsiteRescan(
       postcode: string | null;
       address: string | null;
     };
+    // Load in chunks — a single .in() with hundreds/thousands of ids
+    // (a select-all rescan) overruns the request URL limit and fails the
+    // whole job, which is why large batches came back '0 succeeded'.
+    const prospects: Row[] = [];
+    for (let i = 0; i < prospectIds.length; i += 200) {
+      const chunk = prospectIds.slice(i, i + 200);
+      const { data, error } = await supabase
+        .from('prospects')
+        .select('id, business_name, website, emails, postcode, address')
+        .in('id', chunk);
+      if (error) throw new Error(`Failed to load prospects: ${error.message}`);
+      prospects.push(...((data ?? []) as Row[]));
+    }
     // Each mode auto-filters the selection to the prospects it can help:
     // scraping needs a website; the paid modes only run where they can
     // add value (deep scan: website but no email yet; Google hunt: no
     // email at all) so credits are never spent on businesses that already
     // have an address.
-    const all = (prospects ?? []) as Row[];
+    const all = prospects;
     const rows =
       mode === 'scrape'
         ? all.filter((p) => !!p.website)
@@ -299,13 +306,16 @@ async function recountAffectedSearches(
   prospectIds: string[],
 ): Promise<void> {
   if (prospectIds.length === 0) return;
-  const { data: links } = await supabase
-    .from('prospect_searches')
-    .select('search_id')
-    .in('prospect_id', prospectIds);
-  const searchIds = Array.from(
-    new Set(((links ?? []) as { search_id: string }[]).map((l) => l.search_id)),
-  );
+  // Chunked — same large-.in() hazard as the prospect load.
+  const searchIdSet = new Set<string>();
+  for (let i = 0; i < prospectIds.length; i += 200) {
+    const { data: links } = await supabase
+      .from('prospect_searches')
+      .select('search_id')
+      .in('prospect_id', prospectIds.slice(i, i + 200));
+    for (const l of (links ?? []) as { search_id: string }[]) searchIdSet.add(l.search_id);
+  }
+  const searchIds = [...searchIdSet];
   for (const searchId of searchIds) {
     await recountSearchCounters(searchId);
   }
