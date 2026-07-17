@@ -13,12 +13,19 @@ export type CsvImportRow = {
   emails?: string;         // ; or , separated multi
 };
 
+// Single-value header aliases. Header names are normalised (lowercased,
+// underscores → spaces, whitespace collapsed) before lookup, so
+// 'business_name', 'Business Name' and 'BUSINESS  NAME' all resolve here.
 const HEADER_ALIASES: Record<string, keyof CsvImportRow> = {
   'business name': 'business_name',
   'business': 'business_name',
   'name': 'business_name',
   'company': 'business_name',
-  'address': 'address',
+  'company name': 'business_name',
+  'organisation': 'business_name',
+  'organization': 'business_name',
+  'practice': 'business_name',
+  'practice name': 'business_name',
   'postcode': 'postcode',
   'post code': 'postcode',
   'zip': 'postcode',
@@ -28,37 +35,70 @@ const HEADER_ALIASES: Record<string, keyof CsvImportRow> = {
   'website': 'website',
   'url': 'website',
   'site': 'website',
+  'web': 'website',
   'email': 'email',
+  'e-mail': 'email',
   'emails': 'emails',
   'email(s)': 'emails',
 };
 
+// Columns that together make up the postal address. Every matching column,
+// in order, is joined into one address string — so Address1 / Address2 /
+// Town collapse into "13 Clare Street, Bristol".
+const ADDRESS_HEADER = /^(address|addr|street|town|city|county|locality)\s*\d*$/;
+
+function normaliseHeader(h: string): string {
+  return h.trim().toLowerCase().replace(/_/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+// Pick the delimiter by seeing which candidate appears most in the header
+// row — so tab-separated exports (very common from spreadsheets and
+// government portals) import just as well as comma CSVs.
+function detectDelimiter(headerLine: string): string {
+  const counts: Record<string, number> = {
+    '\t': (headerLine.match(/\t/g) ?? []).length,
+    ',': (headerLine.match(/,/g) ?? []).length,
+    ';': (headerLine.match(/;/g) ?? []).length,
+  };
+  let best = ',';
+  let n = 0;
+  for (const [d, c] of Object.entries(counts)) if (c > n) { best = d; n = c; }
+  return best;
+}
+
 export function parseCsv(text: string): CsvImportRow[] {
-  // Simple CSV parser that handles quoted fields with embedded commas.
-  const lines = splitLines(text);
+  const lines = splitLines(text).filter((l) => l.trim().length > 0);
   if (lines.length < 2) return [];
-  const header = splitRow(lines[0]).map((h) => h.trim().toLowerCase());
-  const mapped = header.map((h) => HEADER_ALIASES[h] ?? null);
+  const delimiter = detectDelimiter(lines[0]);
+  const header = splitRow(lines[0], delimiter).map(normaliseHeader);
 
   const rows: CsvImportRow[] = [];
   for (let i = 1; i < lines.length; i++) {
-    if (!lines[i].trim()) continue;
-    const fields = splitRow(lines[i]);
+    const fields = splitRow(lines[i], delimiter);
     const row: Partial<CsvImportRow> = {};
-    for (let j = 0; j < fields.length; j++) {
-      const key = mapped[j];
-      if (key) row[key] = fields[j].trim();
+    const addressParts: string[] = [];
+    for (let j = 0; j < header.length; j++) {
+      const h = header[j];
+      const val = (fields[j] ?? '').trim();
+      if (!val) continue;
+      const key = HEADER_ALIASES[h];
+      if (key) {
+        row[key] = val;
+      } else if (ADDRESS_HEADER.test(h)) {
+        addressParts.push(val);
+      }
     }
+    if (!row.address && addressParts.length) row.address = addressParts.join(', ');
     if (row.business_name) rows.push(row as CsvImportRow);
   }
   return rows;
 }
 
 function splitLines(text: string): string[] {
-  return text.replace(/\r\n/g, '\n').split('\n');
+  return text.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
 }
 
-function splitRow(line: string): string[] {
+function splitRow(line: string, delimiter: string): string[] {
   const out: string[] = [];
   let buf = '';
   let inQuotes = false;
@@ -75,7 +115,7 @@ function splitRow(line: string): string[] {
       }
     } else if (c === '"') {
       inQuotes = true;
-    } else if (c === ',') {
+    } else if (c === delimiter) {
       out.push(buf);
       buf = '';
     } else {

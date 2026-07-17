@@ -43,9 +43,10 @@ export function CsvImportForm() {
   return (
     <div className="space-y-3 rounded-lg border border-neutral-200 bg-white p-5">
       <div className="text-xs text-neutral-500">
-        Required column: <span className="font-mono">business_name</span>. Optional:{' '}
-        <span className="font-mono">address, postcode, phone, website, email</span>. Header names are flexible
-        — &quot;Company&quot;, &quot;Site&quot;, &quot;Tel&quot;, &quot;Email(s)&quot; etc. all work.
+        Required column: <span className="font-mono">business_name</span> (or Name / Company /
+        Practice). Optional: <span className="font-mono">address, postcode, phone, website, email</span> —
+        header names are flexible, split address columns (Address1 / Address2 / Town) are merged,
+        and both comma- and tab-separated files work.
       </div>
 
       <div>
