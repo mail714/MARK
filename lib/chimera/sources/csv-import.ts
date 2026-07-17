@@ -169,7 +169,7 @@ export async function importCsvProspects(searchId: string, rows: CsvImportRow[])
       google_address: null,
       address_note: null,
       postcode,
-      phone: r.phone?.trim() ?? null,
+      phone: normaliseUkPhone(r.phone),
       website: r.website?.trim() ?? null,
       website_domain: domain,
       emails,
@@ -214,4 +214,19 @@ function parseEmailField(r: CsvImportRow): string[] {
     .split(/[;,]/)
     .map((e) => e.trim().toLowerCase())
     .filter((e) => /.+@.+\..+/.test(e));
+}
+
+// Restores the leading 0 on UK phone numbers that lost it in export
+// (e.g. '1179275890' -> '01179275890', '7788966237' -> '07788966237').
+// Only touches numbers that plainly need it: 10 national digits, not
+// already starting with 0, and not international (+44 / 00). Anything
+// else is passed through unchanged so we never mangle a good number.
+function normaliseUkPhone(raw: string | null | undefined): string | null {
+  const s = (raw ?? '').trim();
+  if (!s) return null;
+  if (s.startsWith('+') || s.replace(/\D/g, '').startsWith('00')) return s; // international
+  const digits = s.replace(/\D/g, '');
+  if (digits.startsWith('0')) return s; // already has the leading zero
+  if (digits.length === 10 && /^[1-9]/.test(digits)) return `0${s}`;
+  return s;
 }
