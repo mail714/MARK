@@ -457,10 +457,10 @@ export function findContactLinks(
 export type WebsiteEnrichment = {
   emails: string[];
   address: AddressExtract;
-  // How the homepage fetch went: 'direct' = plain fetch worked,
-  // 'scrapingbee' = residential fallback worked, 'failed' = we never got
-  // the page (403 block, timeout, refused). Lets callers tell "read the
-  // site, no email" apart from "couldn't read the site at all".
+  // How the homepage fetch went: 'direct' = plain fetch, 'scrapingbee' =
+  // residential fallback, 'failed' = we never got the page (403 block,
+  // timeout, refused). Lets callers tell "read the site, no email" apart
+  // from "couldn't read it at all".
   fetchStatus: 'direct' | 'scrapingbee' | 'failed';
 };
 

@@ -502,7 +502,7 @@ export function ProspectsReview({
             onClick={() => rescanWebsites('scrape')}
             disabled={busy || selected.size === 0}
             className="rounded-md border border-blue-300 bg-white px-3 py-1.5 text-xs font-medium text-blue-700 hover:bg-blue-50 disabled:opacity-50"
-            title="FREE — MARK visits each selected prospect's website like a browser (full browser headers, homepage + its contact page) and extracts emails. Can't run JavaScript or beat hard bot-blocks — use Deep scan for those. Skips prospects without a website."
+            title="FREE — MARK visits each selected prospect's website like a real browser: full browser headers, homepage + its contact page, and headless-Chromium rendering that runs the site's JavaScript so script-injected emails are found too. Can't beat a hard IP block (Cloudflare/WAF) — use Deep scan for those. Skips prospects without a website."
           >
             Rescan websites ({selected.size})
           </button>

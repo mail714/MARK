@@ -1,6 +1,12 @@
 import { createAdminClient } from '@/lib/supabase/admin';
-import { domainOf, scrapeWebsiteForEmailsAndAddress } from './website-scrape';
+import {
+  domainOf,
+  extractEmailsFromHtml,
+  normaliseWebsiteUrl,
+  scrapeWebsiteForEmailsAndAddress,
+} from './website-scrape';
 import { huntEmailsViaGoogle } from './google-email-hunt';
+import { renderPageHeadless } from './headless-fetch';
 import { isScrapingBeeConfigured } from '@/lib/scrapingbee/client';
 import { createBulkJob, updateBulkJob, type BulkJob } from './bulk-jobs';
 import { recountSearchCounters } from './recount';
@@ -126,14 +132,35 @@ async function runWebsiteRescan(
                 added += 1;
               }
             }
+
+            // Rescan's browser step (free): the plain fetch found nothing,
+            // so render the page in a real headless Chromium — this runs
+            // the site's JavaScript, catching script-injected emails.
+            // Self-disables if Chromium can't launch, so it can't break the
+            // job. Deep scan skips this (ScrapingBee already renders JS).
+            if (mode === 'scrape' && added === 0 && merged.length === 0) {
+              const url = normaliseWebsiteUrl(p.website);
+              if (url) {
+                const rendered = await renderPageHeadless(url);
+                if (rendered) {
+                  for (const e of extractEmailsFromHtml(rendered)) {
+                    if (!before.has(e)) {
+                      merged.push(e);
+                      before.add(e);
+                      added += 1;
+                    }
+                  }
+                }
+              }
+            }
             // Nothing found — say WHY and point at the right next step,
             // rather than reporting a silent 'success'.
             if (added === 0 && merged.length === 0) {
               if (mode === 'scrape') {
                 failure =
                   enrichment.fetchStatus === 'failed'
-                    ? 'Website blocked MARK (403 / timeout) — try Deep scan'
-                    : 'No email in the page source (may be JavaScript-shown) — try Deep scan';
+                    ? 'Website blocked MARK even with browser rendering (likely an IP block) — try Deep scan'
+                    : 'No email found on the site (rendered in a browser) — try Deep scan or Google hunt';
               } else {
                 failure =
                   enrichment.fetchStatus === 'failed'
