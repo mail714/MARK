@@ -111,9 +111,11 @@ async function runWebsiteRescan(
 
         if ((mode === 'scrape' || mode === 'deep-scan') && p.website) {
           try {
-            // Plain rescan stays on free direct fetches; deep scan allows
-            // the paid ScrapingBee layer (blocked-host fallback + JS
-            // rendering) through the whole cascade.
+            // Rescan (scrape) = MARK's own fetch, dressed to look like a
+            // real browser (full Chrome header set), free. Deep scan
+            // additionally routes through ScrapingBee — residential IPs +
+            // JavaScript rendering — for sites that block a plain server
+            // or only reveal the email after their scripts run.
             const enrichment = await scrapeWebsiteForEmailsAndAddress(p.website, {
               allowScrapingBee: mode === 'deep-scan',
             });
@@ -122,6 +124,21 @@ async function runWebsiteRescan(
                 merged.push(e);
                 before.add(e);
                 added += 1;
+              }
+            }
+            // Nothing found — say WHY and point at the right next step,
+            // rather than reporting a silent 'success'.
+            if (added === 0 && merged.length === 0) {
+              if (mode === 'scrape') {
+                failure =
+                  enrichment.fetchStatus === 'failed'
+                    ? 'Website blocked MARK (403 / timeout) — try Deep scan'
+                    : 'No email in the page source (may be JavaScript-shown) — try Deep scan';
+              } else {
+                failure =
+                  enrichment.fetchStatus === 'failed'
+                    ? 'Website unreachable even via ScrapingBee — try Google email hunt'
+                    : 'No email anywhere on the site — try Google email hunt';
               }
             }
           } catch (err) {

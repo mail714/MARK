@@ -41,9 +41,27 @@ const IGNORE_EMAIL = [
 // ScrapingBee homepage re-fetch — guessing /contact, /contact-us etc.
 // burns requests and credits on URLs that 404 more often than not.
 
+// The full header set a real Chrome sends on a top-level navigation. A
+// lone User-Agent is a classic bot tell; sites doing lightweight header
+// sniffing reject it with a 403. Presenting the complete, consistent set
+// (UA + client hints + Sec-Fetch + Accept-*) gets MARK's own free fetch
+// past many of those without needing ScrapingBee. It can't defeat a real
+// JS challenge (Cloudflare) or a JavaScript-rendered email — that's what
+// Deep scan is for.
 const HEADERS = {
   'User-Agent':
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+  Accept:
+    'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+  'Accept-Language': 'en-GB,en;q=0.9',
+  'Upgrade-Insecure-Requests': '1',
+  'Sec-Fetch-Dest': 'document',
+  'Sec-Fetch-Mode': 'navigate',
+  'Sec-Fetch-Site': 'none',
+  'Sec-Fetch-User': '?1',
+  'sec-ch-ua': '"Not/A)Brand";v="8", "Chromium";v="126", "Google Chrome";v="126"',
+  'sec-ch-ua-mobile': '?0',
+  'sec-ch-ua-platform': '"Windows"',
 };
 
 const REQUEST_TIMEOUT_MS = 15000;
@@ -439,13 +457,22 @@ export function findContactLinks(
 export type WebsiteEnrichment = {
   emails: string[];
   address: AddressExtract;
+  // How the homepage fetch went: 'direct' = plain fetch worked,
+  // 'scrapingbee' = residential fallback worked, 'failed' = we never got
+  // the page (403 block, timeout, refused). Lets callers tell "read the
+  // site, no email" apart from "couldn't read the site at all".
+  fetchStatus: 'direct' | 'scrapingbee' | 'failed';
 };
 
 export async function scrapeWebsiteForEmailsAndAddress(
   websiteUrl: string,
   opts: ScrapeOptions = {},
 ): Promise<WebsiteEnrichment> {
-  const empty: WebsiteEnrichment = { emails: [], address: { street: null, city: null, postcode: null } };
+  const empty: WebsiteEnrichment = {
+    emails: [],
+    address: { street: null, city: null, postcode: null },
+    fetchStatus: 'failed',
+  };
   // Schools often have URLs like 'www.example.co.uk' without a scheme in
   // the GIAS data. Without normalising, new URL() throws and we silently
   // return empty — counting that as 'succeeded' and never actually fetching.
@@ -468,12 +495,13 @@ export async function scrapeWebsiteForEmailsAndAddress(
   // links as 'different origin'.
   const homeResult = await fetchPageWithSource(websiteUrl, opts);
   const home = homeResult.html;
+  const fetchStatus = homeResult.source;
   const effectiveUrl = homeResult.finalUrl ?? websiteUrl;
   if (home) {
     emails = extractEmailsFromHtml(home);
     address = extractAddressFromHtml(home);
     if (emails.size > 0 && address.postcode) {
-      return { emails: [...emails].sort(), address };
+      return { emails: [...emails].sort(), address, fetchStatus };
     }
   }
 
@@ -533,7 +561,7 @@ export async function scrapeWebsiteForEmailsAndAddress(
     }
   }
 
-  return { emails: [...emails].sort(), address };
+  return { emails: [...emails].sort(), address, fetchStatus };
 }
 
 export function domainOf(url: string | null): string | null {
