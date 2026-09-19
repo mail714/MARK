@@ -1,0 +1,1381 @@
+#!/usr/bin/env python3
+"""
+shopVOX Export — everything, one run
+====================================
+Merges the original list exporter with the line-items downloader, and adds
+a per-company detail pass for the addresses the list export doesn't carry.
+
+WHAT IT PULLS
+  companies / contacts / quotes / salesOrders / invoices
+        The list endpoints. Same as the original tool.
+  lineItems
+        One request per quote / sales order / invoice. This is the slow
+        one — tens of thousands of requests — so it runs in parallel and
+        is resumable: stop it and re-run, it picks up where it left off.
+  assets
+        Every file attached to a quote / sales order / invoice, filed by
+        transaction number: PDFs land in <out>/assets/SO51172/ or
+        <out>/assets/QT 58232/. A quote that became a sales order or an
+        invoice follows that order's number, so a job's paperwork ends up
+        in one folder. Resumable like the line items, and it will not
+        re-download a file it already has.
+
+        NOTE: where shopVOX hangs the attachments is discovered at run
+        time, not hard-coded — see Stage 4. If the probe finds nothing,
+        it says so and leaves a sample payload in _asset_probe/.
+
+  companyAddresses
+        One request per company. The list export only carries
+        primaryAddress, so any company whose address is filed as BILLING
+        looks address-less. This fetches the full record.
+
+        NOTE: this pass is UNTESTED against the live API — the machine I
+        was written on can't reach shopvox.com. If it 403s, don't fight
+        it: shopVOX Pro's own Customers > Export > To CSV gives the same
+        addresses in one click, and JASPER imports that file directly.
+
+HOW TO USE
+  1. python shopvox_export_all.py
+  2. Log into shopVOX. F12 -> Network -> click any api.shopvox.com
+     request -> copy the whole "cookie:" header value.
+  3. Paste it in, choose a folder, tick what you want, Run.
+
+Everything lands as .csv (plus .json for the list pulls). Feed the whole
+folder to JASPER's "Import from ShopVox".
+"""
+
+import csv
+import json
+import os
+import queue
+import re
+import shutil
+import subprocess
+import sys
+import threading
+import time
+import tkinter as tk
+import urllib.error
+import urllib.parse
+import urllib.request
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from tkinter import filedialog, messagebox, scrolledtext, ttk
+
+BASE = "https://api.shopvox.com/edge"
+
+# List endpoints. Several spellings per target: the first that answers
+# with an array wins, so a rename upstream doesn't kill the run.
+TARGETS = {
+    "companies":   ["companies"],
+    "contacts":    ["contacts"],
+    "quotes":      ["transactions/quotes", "transactions?type=quote", "quotes"],
+    "salesOrders": ["transactions/work_orders", "transactions?type=work_order",
+                    "work_orders", "sales_orders"],
+    "invoices":    ["transactions/invoices", "transactions?type=invoice",
+                    "invoices"],
+}
+
+# Per-transaction detail, for line items.
+DETAIL_PATHS_BY_KIND = {
+    "quotes":      ["transactions/quotes/{id}"],
+    "salesOrders": ["transactions/work_orders/{id}"],
+    "invoices":    ["transactions/invoices/{id}"],
+}
+LINES_PER_PAGE = 200
+
+# Per-company detail, for the addresses the list export omits.
+COMPANY_DETAIL_PATHS = ["companies/{id}"]
+
+WORKERS = 6
+TIMEOUT = 30
+
+
+# ---------------------------------------------------------------------------
+# Networking
+# ---------------------------------------------------------------------------
+
+class AuthExpired(Exception):
+    """Cookie no longer valid — stop cleanly so progress is kept."""
+
+
+def make_get(cookie):
+    cookie = " ".join(cookie.split())
+
+    def get(path):
+        req = urllib.request.Request(f"{BASE}/{path}", headers={
+            "Cookie": cookie,
+            "Accept": "application/json, text/plain, */*",
+            "Origin": "https://express.shopvox.com",
+            "Referer": "https://express.shopvox.com/",
+            "User-Agent": "Mozilla/5.0",
+            # Required. Without it the API 403s even on paths that exist —
+            # this is what made an earlier address probe look like a dead
+            # endpoint when it was only a missing header.
+            "x-shopvox-client": "web",
+        })
+        with urllib.request.urlopen(req, timeout=TIMEOUT) as r:
+            return json.loads(r.read().decode("utf-8", "replace"))
+    return get
+
+
+def get_with_retry(get, path, tries=3):
+    """One GET, retried on transient failures. 401/403 aborts the run."""
+    for attempt in range(tries):
+        try:
+            return get(path)
+        except urllib.error.HTTPError as e:
+            if e.code in (401, 403):
+                raise AuthExpired(f"HTTP {e.code} on /{path}")
+            if e.code in (429, 500, 502, 503, 504) and attempt < tries - 1:
+                time.sleep(2 ** attempt)
+                continue
+            raise
+        except Exception:
+            if attempt < tries - 1:
+                time.sleep(2 ** attempt)
+                continue
+            raise
+    return None
+
+
+def arr_key(obj):
+    """The array in a list response, whatever it happens to be called."""
+    best_k, best_n = None, -1
+    for k, v in obj.items():
+        if k == "meta":
+            continue
+        if isinstance(v, list) and len(v) > best_n:
+            best_k, best_n = k, len(v)
+    return best_k
+
+
+def unwrap(payload):
+    if isinstance(payload, list):
+        return payload
+    if isinstance(payload, dict):
+        for k in ("data", "results", "records", "items"):
+            if isinstance(payload.get(k), list):
+                return payload[k]
+        return [payload]
+    return []
+
+
+# ---------------------------------------------------------------------------
+# CSV
+# ---------------------------------------------------------------------------
+
+def flatten(obj, prefix="", out=None):
+    if out is None:
+        out = {}
+    for key, val in obj.items():
+        col = f"{prefix}.{key}" if prefix else key
+        if val is None:
+            out[col] = ""
+        elif isinstance(val, list):
+            if not val:
+                out[col] = ""
+            elif all(not isinstance(x, dict) for x in val):
+                out[col] = "; ".join(str(x) for x in val)
+            elif all(isinstance(x, dict) and "name" in x for x in val):
+                out[col] = "; ".join(x["name"] for x in val)
+            else:
+                out[col] = json.dumps(val)
+        elif isinstance(val, dict):
+            flatten(val, col, out)
+        else:
+            out[col] = val
+    return out
+
+
+def write_csv(path, rows):
+    """Union of every column seen, in first-seen order — so a field that
+    only some records carry still gets its own column rather than being
+    dropped."""
+    flat = [flatten(r) for r in rows]
+    cols, seen = [], set()
+    for r in flat:
+        for c in r:
+            if c not in seen:
+                seen.add(c)
+                cols.append(c)
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=cols, extrasaction="ignore")
+        w.writeheader()
+        w.writerows(flat)
+    return len(cols)
+
+
+def csv_from_jsonl(jsonl_path, csv_path):
+    """Rebuild a CSV from the resumable JSONL log."""
+    rows = []
+    with open(jsonl_path, encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                try:
+                    rows.append(json.loads(line))
+                except json.JSONDecodeError:
+                    continue
+    if rows:
+        write_csv(csv_path, rows)
+    return len(rows)
+
+
+# ---------------------------------------------------------------------------
+# Stage 1 — the list endpoints
+# ---------------------------------------------------------------------------
+
+def pull_lists(get, out_dir, chosen, per, gap, log):
+    """Returns {target: [records]} for whatever was pulled."""
+    pulled = {}
+    for label in chosen:
+        path = key = None
+        for p in TARGETS[label]:
+            try:
+                d = get_with_retry(get, f"{p}{'&' if '?' in p else '?'}page=1&perPage=1")
+                k = arr_key(d)
+                if k is not None:
+                    path, key = p, k
+                    break
+            except AuthExpired:
+                raise
+            except Exception:
+                continue
+        if not path:
+            log(f"X  {label}: no endpoint found")
+            continue
+
+        log(f">  {label}  (/edge/{path}, key '{key}')")
+        page, rows = 1, []
+        while True:
+            sep = "&" if "?" in path else "?"
+            d = get_with_retry(get, f"{path}{sep}page={page}&perPage={per}")
+            meta = d.get("meta", {}) if isinstance(d, dict) else {}
+            rows += d.get(key, []) if isinstance(d, dict) else []
+            log(f"     page {page}/{meta.get('totalPages', '?')}  "
+                f"({len(rows)}/{meta.get('totalCount', '?')})")
+            if not meta.get("hasNextPage"):
+                break
+            page += 1
+            time.sleep(gap)
+
+        if not rows:
+            log(f"X  {label}: 0 records")
+            continue
+        with open(os.path.join(out_dir, f"{label}.json"), "w",
+                  encoding="utf-8") as f:
+            json.dump(rows, f, indent=2, ensure_ascii=False)
+        ncols = write_csv(os.path.join(out_dir, f"{label}.csv"), rows)
+        log(f"OK {label}: {len(rows):,} records, {ncols} columns")
+        pulled[label] = rows
+    return pulled
+
+
+# ---------------------------------------------------------------------------
+# Stage 2 — line items, one request per transaction
+# ---------------------------------------------------------------------------
+
+def fetch_lines(get, kind, rid):
+    """Every line item on one transaction. Returns (rows, status).
+
+    The API pages line items — the default is 10 per page, which silently
+    truncates anything bigger — so this follows hasNextPage to the end.
+    """
+    out, page = [], 1
+    for tpl in DETAIL_PATHS_BY_KIND.get(kind, []):
+        try:
+            while True:
+                base = tpl.format(id=rid)
+                sep = "&" if "?" in base else "?"
+                d = get_with_retry(
+                    get, f"{base}{sep}page={page}&perPage={LINES_PER_PAGE}")
+                if not isinstance(d, dict):
+                    break
+                body = d.get("data") if isinstance(d.get("data"), dict) else d
+                lines = body.get("lineItems") or []
+                for i, ln in enumerate(lines):
+                    if isinstance(ln, dict):
+                        ln = dict(ln)
+                        ln["parent_id"] = rid
+                        ln["parent_kind"] = kind
+                        ln["line_position"] = ln.get("position", i + 1)
+                        out.append(ln)
+                meta = body.get("meta") or d.get("meta") or {}
+                if not meta.get("hasNextPage"):
+                    return out, "ok"
+                page += 1
+        except AuthExpired:
+            raise
+        except Exception:
+            return out, "partial" if out else "failed"
+    return out, "ok" if out else "failed"
+
+
+def pull_line_items(get, out_dir, pulled, log, stop):
+    jsonl = os.path.join(out_dir, "lineItems.jsonl")
+    done = set()
+    if os.path.exists(jsonl):
+        with open(jsonl, encoding="utf-8") as f:
+            for line in f:
+                try:
+                    done.add(json.loads(line).get("parent_id"))
+                except json.JSONDecodeError:
+                    continue
+        log(f"   resuming — {len(done):,} transactions already fetched")
+
+    jobs = []
+    for kind in ("quotes", "salesOrders", "invoices"):
+        for rec in pulled.get(kind, []):
+            rid = rec.get("id")
+            if rid and rid not in done:
+                jobs.append((kind, rid))
+    if not jobs:
+        log("   nothing new to fetch")
+    else:
+        log(f">  line items for {len(jobs):,} transactions "
+            f"({WORKERS} at a time)")
+        written = failed = 0
+        lock = threading.Lock()
+        with open(jsonl, "a", encoding="utf-8") as fh:
+            with ThreadPoolExecutor(max_workers=WORKERS) as pool:
+                futures = {pool.submit(fetch_lines, get, k, i): (k, i)
+                           for k, i in jobs}
+                for n, fut in enumerate(as_completed(futures), 1):
+                    if stop.is_set():
+                        log("   stopped — progress kept, re-run to continue")
+                        break
+                    kind, rid = futures[fut]
+                    try:
+                        lines, status = fut.result()
+                    except AuthExpired:
+                        log("X  cookie expired — stopping cleanly, "
+                            "progress kept")
+                        break
+                    except Exception:
+                        failed += 1
+                        continue
+                    # Only a clean fetch counts as done, so a partial one
+                    # is retried on the next run rather than left short.
+                    if status == "ok":
+                        with lock:
+                            for ln in lines:
+                                fh.write(json.dumps(ln, ensure_ascii=False) + "\n")
+                            written += len(lines)
+                    else:
+                        failed += 1
+                    if n % 100 == 0:
+                        fh.flush()
+                        log(f"     {n:,}/{len(jobs):,}  "
+                            f"({written:,} lines, {failed} failed)")
+        log(f"   {written:,} lines written, {failed} transactions failed")
+
+    if os.path.exists(jsonl):
+        n = csv_from_jsonl(jsonl, os.path.join(out_dir, "lineItems.csv"))
+        log(f"OK lineItems.csv: {n:,} rows")
+
+
+# ---------------------------------------------------------------------------
+# Stage 3 — company detail, for the addresses the list export omits
+# ---------------------------------------------------------------------------
+
+def pull_company_addresses(get, out_dir, pulled, log, stop):
+    companies = pulled.get("companies") or []
+    if not companies:
+        log("X  need the companies pull for this — tick it too")
+        return
+    jsonl = os.path.join(out_dir, "companyAddresses.jsonl")
+    done = set()
+    if os.path.exists(jsonl):
+        with open(jsonl, encoding="utf-8") as f:
+            for line in f:
+                try:
+                    done.add(json.loads(line).get("company_id"))
+                except json.JSONDecodeError:
+                    continue
+        log(f"   resuming — {len(done):,} companies already fetched")
+
+    jobs = [c["id"] for c in companies if c.get("id") and c["id"] not in done]
+    if not jobs:
+        log("   nothing new to fetch")
+    else:
+        log(f">  addresses for {len(jobs):,} companies")
+
+        def one(cid):
+            for tpl in COMPANY_DETAIL_PATHS:
+                d = get_with_retry(get, tpl.format(id=cid))
+                if isinstance(d, dict) and d.get("status") == 404:
+                    continue          # this API wraps 404 in a 200
+                body = d.get("data") if isinstance(d, dict) and isinstance(
+                    d.get("data"), dict) else d
+                rows = []
+                for a in (body.get("addresses") or []) if isinstance(body, dict) else []:
+                    if isinstance(a, dict):
+                        a = dict(a)
+                        a["company_id"] = cid
+                        a["company_name"] = (body.get("name") or "")
+                        rows.append(a)
+                if rows:
+                    return rows
+            return []
+
+        written = failed = 0
+        lock = threading.Lock()
+        with open(jsonl, "a", encoding="utf-8") as fh:
+            with ThreadPoolExecutor(max_workers=WORKERS) as pool:
+                futures = {pool.submit(one, cid): cid for cid in jobs}
+                for n, fut in enumerate(as_completed(futures), 1):
+                    if stop.is_set():
+                        log("   stopped — progress kept")
+                        break
+                    try:
+                        rows = fut.result()
+                    except AuthExpired:
+                        log("X  cookie expired — stopping cleanly")
+                        break
+                    except Exception:
+                        failed += 1
+                        continue
+                    if rows:
+                        with lock:
+                            for r in rows:
+                                fh.write(json.dumps(r, ensure_ascii=False) + "\n")
+                            written += len(rows)
+                    if n % 100 == 0:
+                        fh.flush()
+                        log(f"     {n:,}/{len(jobs):,}  ({written:,} addresses)")
+        log(f"   {written:,} addresses, {failed} companies failed")
+        if not written:
+            log("!  Nothing came back. Use shopVOX Pro's own")
+            log("!  Customers > Export > To CSV instead — JASPER reads it.")
+
+    if os.path.exists(jsonl):
+        n = csv_from_jsonl(jsonl, os.path.join(out_dir, "companyAddresses.csv"))
+        log(f"OK companyAddresses.csv: {n:,} rows")
+
+
+# ---------------------------------------------------------------------------
+# Stage 4 — transaction assets, filed by QT / SO number
+# ---------------------------------------------------------------------------
+#
+# Folder rule (what the brief asked for):
+#   quote that never became anything   ->  assets/QT 58232/
+#   sales order, or a quote that became one  ->  assets/SO51172/
+#   invoice                            ->  assets/SO<its sales order number>/
+#                                          (falls back to the invoice's own
+#                                          number if no link is on the record)
+# Change ASSET_FOLDER_QT / ASSET_FOLDER_SO below to restyle those names.
+
+ASSETS_DIRNAME = "assets"
+ASSET_FOLDER_QT = "QT {num}"      # matches the "QT 58232" in the brief
+ASSET_FOLDER_SO = "SO{num}"       # matches the "SO51172" in the brief
+
+KIND_PATH = {"quotes": "quotes", "salesOrders": "work_orders",
+             "invoices": "invoices"}
+KIND_ASSETABLE = {"quotes": "Quote", "salesOrders": "WorkOrder",
+                  "invoices": "Invoice"}
+
+# Where the assets live is the one thing I couldn't verify from here — this
+# machine can't reach shopvox.com. So the run *discovers* it: it reads a
+# sample of transactions, and if the detail payload already carries the
+# attachments (it usually does, same call the line items come from) it uses
+# that. Otherwise it tries these sub-endpoints and keeps the first that
+# answers with something asset-shaped. The answer is cached in
+# assetsMode.json so later runs skip the probe.
+ASSET_SUBPATHS = [
+    "transactions/{kp}/{id}/assets",
+    "transactions/{kp}/{id}/attachments",
+    "{kp}/{id}/assets",
+    "assets?assetableType={at}&assetableId={id}",
+    "assets?assetable_type={at}&assetable_id={id}",
+]
+ASSET_SAMPLES = 40          # transactions read during discovery
+DOWNLOAD_TIMEOUT = 180      # seconds per file — proofs can be fat
+
+# --- reading a transaction number off a record -----------------------------
+
+NUMBER_KEYS = ("txnNumber", "transactionNumber", "number", "quoteNumber",
+               "salesOrderNumber", "workOrderNumber", "invoiceNumber",
+               "orderNumber", "docNumber", "name", "title")
+NUM_RE = re.compile(r"^(?:(?:QT|SO|WO|IN|INV|EST)[\s\-_#]*)?(\d{2,})$", re.I)
+
+
+def core_number(value):
+    """'QT 58232' / 'SO51172' / 58232  ->  '58232'. None if it isn't one."""
+    if value is None:
+        return None
+    m = NUM_RE.match(str(value).strip())
+    return m.group(1) if m else None
+
+
+def txn_number(rec):
+    if not isinstance(rec, dict):
+        return None
+    for k in NUMBER_KEYS:
+        n = core_number(rec.get(k))
+        if n:
+            return n
+    return None
+
+
+# --- working out which folder a transaction belongs in ---------------------
+
+QUOTE_REF_KEYS = ("quoteId", "quote_id", "sourceQuoteId", "fromQuoteId",
+                  "quoteTxnId", "originalQuoteId")
+QUOTE_OBJ_KEYS = ("quote", "sourceQuote", "fromQuote", "originalQuote")
+SO_REF_KEYS = ("salesOrderId", "sales_order_id", "workOrderId",
+               "work_order_id", "soId", "orderId", "convertedToId",
+               "transactionId")
+SO_OBJ_KEYS = ("salesOrder", "workOrder", "order", "convertedTo",
+               "transaction")
+CONVERTED_HINTS = ("convert", "won", "ordered", "sales order", "work order")
+STATUS_KEYS = ("status", "state", "quoteStatus", "workflowState", "stage")
+
+
+def ref_id(rec, id_keys, obj_keys):
+    """The id of a linked transaction, however the record spells it."""
+    for k in id_keys:
+        v = rec.get(k)
+        if isinstance(v, (str, int)) and str(v).strip():
+            return str(v)
+    for k in obj_keys:
+        v = rec.get(k)
+        if isinstance(v, dict) and v.get("id"):
+            return str(v["id"])
+    return None
+
+
+def ref_number(rec, obj_keys):
+    """A number carried on the linked object itself, if it's embedded."""
+    for k in obj_keys:
+        v = rec.get(k)
+        if isinstance(v, dict):
+            n = txn_number(v)
+            if n:
+                return n
+    return None
+
+
+def looks_converted(rec):
+    for k in STATUS_KEYS:
+        v = rec.get(k)
+        if isinstance(v, str) and any(h in v.lower() for h in CONVERTED_HINTS):
+            return True
+    return False
+
+
+def build_folder_index(pulled, log):
+    """{(kind, id): folder name} for every transaction we know about."""
+    quotes = pulled.get("quotes") or []
+    sos = pulled.get("salesOrders") or []
+    invoices = pulled.get("invoices") or []
+
+    so_num_by_id = {}
+    for r in sos:
+        rid, num = str(r.get("id") or ""), txn_number(r)
+        if rid and num:
+            so_num_by_id[rid] = num
+    so_numbers = set(so_num_by_id.values())
+
+    # Invoice -> the sales order it belongs to.
+    inv_num_by_id, inv_own = {}, 0
+    for r in invoices:
+        rid = str(r.get("id") or "")
+        if not rid:
+            continue
+        num = so_num_by_id.get(ref_id(r, SO_REF_KEYS, SO_OBJ_KEYS) or "")
+        num = num or ref_number(r, SO_OBJ_KEYS) or so_num_by_id.get(rid)
+        if not num:
+            num = txn_number(r)
+            inv_own += 1 if num else 0
+        if num:
+            inv_num_by_id[rid] = num
+
+    # Reverse links: a sales order / invoice pointing back at its quote.
+    so_num_by_quote = {}
+    for r in sos:
+        q, num = ref_id(r, QUOTE_REF_KEYS, QUOTE_OBJ_KEYS), txn_number(r)
+        if q and num:
+            so_num_by_quote.setdefault(q, num)
+    for r in invoices:
+        q = ref_id(r, QUOTE_REF_KEYS, QUOTE_OBJ_KEYS)
+        num = inv_num_by_id.get(str(r.get("id") or ""))
+        if q and num:
+            so_num_by_quote.setdefault(q, num)
+
+    folders, how = {}, {}
+    for r in sos:
+        rid = str(r.get("id") or "")
+        if rid:
+            num = so_num_by_id.get(rid)
+            folders[("salesOrders", rid)] = (
+                ASSET_FOLDER_SO.format(num=num) if num
+                else f"UNKNOWN-SO-{rid[:8]}")
+    for r in invoices:
+        rid = str(r.get("id") or "")
+        if rid:
+            num = inv_num_by_id.get(rid)
+            folders[("invoices", rid)] = (
+                ASSET_FOLDER_SO.format(num=num) if num
+                else f"UNKNOWN-INV-{rid[:8]}")
+
+    to_so = to_qt = orphaned = 0
+    for r in quotes:
+        rid = str(r.get("id") or "")
+        if not rid:
+            continue
+        num = why = None
+        if rid in so_num_by_id:
+            num, why = so_num_by_id[rid], "same id as a sales order"
+        elif rid in inv_num_by_id:
+            num, why = inv_num_by_id[rid], "same id as an invoice"
+        else:
+            linked = ref_id(r, SO_REF_KEYS, SO_OBJ_KEYS)
+            if linked and linked in so_num_by_id:
+                num, why = so_num_by_id[linked], "link held on the quote"
+            if not num:
+                embedded = ref_number(r, SO_OBJ_KEYS)
+                if embedded:
+                    num, why = embedded, "sales order embedded on the quote"
+            if not num and rid in so_num_by_quote:
+                num, why = so_num_by_quote[rid], "link back from the order"
+            if not num:
+                qn = txn_number(r)
+                if qn and qn in so_numbers:
+                    num, why = qn, "same number as a sales order"
+        if num:
+            folders[("quotes", rid)] = ASSET_FOLDER_SO.format(num=num)
+            to_so += 1
+            how[why] = how.get(why, 0) + 1
+        else:
+            qn = txn_number(r)
+            folders[("quotes", rid)] = (ASSET_FOLDER_QT.format(num=qn) if qn
+                                        else f"UNKNOWN-QT-{rid[:8]}")
+            to_qt += 1
+            if looks_converted(r):
+                orphaned += 1
+
+    log(f"   folders: {len(so_num_by_id):,} sales orders, "
+        f"{len(inv_num_by_id):,} invoices, "
+        f"{to_qt:,} quotes stay QT, {to_so:,} quotes follow their SO")
+    for why, n in sorted(how.items(), key=lambda kv: -kv[1]):
+        log(f"     quote->SO by {why}: {n:,}")
+    if inv_own:
+        log(f"   !  {inv_own:,} invoices carry no link to a sales order — "
+            f"filed under SO + their own number")
+    if orphaned:
+        log(f"   !  {orphaned:,} quotes look converted but link to nothing — "
+            f"filed under QT. Send me one such quote's JSON and I'll wire "
+            f"the field up.")
+    return folders
+
+
+# --- spotting an asset in whatever shape the payload arrives in ------------
+
+NAME_KEYS = ("fileFileName", "fileName", "filename", "originalFilename",
+             "originalName", "assetFileName", "displayName", "name", "title")
+URL_KEYS = ("url", "fileUrl", "assetUrl", "downloadUrl", "publicUrl",
+            "originalUrl", "viewUrl", "s3Url", "link", "href", "file",
+            "attachment", "asset", "document", "path")
+NESTED_URL_KEYS = ("url", "original", "originalUrl", "downloadUrl", "href",
+                   "large", "public")
+CTYPE_KEYS = ("fileContentType", "contentType", "mimeType", "mime", "type")
+SIZE_KEYS = ("fileFileSize", "fileSize", "size", "byteSize", "bytes")
+# Branding and UI chrome — never the customer's artwork.
+SKIP_KEYS = {"logo", "companyLogo", "avatar", "profileImage", "signature",
+             "thumbnail", "thumb", "icon", "favicon"}
+
+
+def _url_of(node):
+    for k in URL_KEYS:
+        v = node.get(k)
+        if isinstance(v, str) and (v.startswith("http") or v.startswith("/")):
+            return v.strip()
+        if isinstance(v, dict):
+            for kk in NESTED_URL_KEYS:
+                vv = v.get(kk)
+                if isinstance(vv, str) and (vv.startswith("http")
+                                            or vv.startswith("/")):
+                    return vv.strip()
+    return None
+
+
+def _str_of(node, keys):
+    for k in keys:
+        v = node.get(k)
+        if isinstance(v, str) and v.strip():
+            return v.strip()
+    return None
+
+
+def _ctype_of(node):
+    """A content type, not a record type — 'application/pdf' has the slash,
+    'type': 'Quote' doesn't, which keeps ordinary records out of the way."""
+    for k in CTYPE_KEYS:
+        v = node.get(k)
+        if isinstance(v, str) and "/" in v:
+            return v.strip()
+    return None
+
+
+def _size_of(node):
+    for k in SIZE_KEYS:
+        v = node.get(k)
+        if isinstance(v, (int, float)) and v >= 0:
+            return int(v)
+        if isinstance(v, str) and v.isdigit():
+            return int(v)
+    return ""
+
+
+def _name_of(node, url):
+    name = _str_of(node, NAME_KEYS)
+    if name:
+        return name
+    if url:
+        base = urllib.parse.unquote(
+            os.path.basename(urllib.parse.urlsplit(url).path))
+        if base:
+            return base
+    return ""
+
+
+def looks_like_asset(node):
+    url = _url_of(node)
+    if not url:
+        return False
+    if _ctype_of(node):
+        return True
+    ext = os.path.splitext(urllib.parse.urlsplit(url).path)[1]
+    if 1 < len(ext) <= 6 and ext[1:].isalnum():
+        return True
+    name = _str_of(node, NAME_KEYS)
+    return bool(name and "." in name)
+
+
+def is_pdf(name, url, ctype):
+    if ctype and "pdf" in ctype.lower():
+        return True
+    if name and name.lower().rstrip().endswith(".pdf"):
+        return True
+    if url and urllib.parse.urlsplit(url).path.lower().endswith(".pdf"):
+        return True
+    return False
+
+
+def collect_assets(payload):
+    """Every asset-shaped node anywhere in a payload, line items included.
+
+    Walking the whole thing rather than reading one known key is deliberate:
+    it survives the attachments being filed under 'assets', 'attachments',
+    'files', or hung off each line item, which is the bit I can't check
+    from here."""
+    found, seen = [], set()
+
+    def walk(node, path, depth, root=False):
+        if depth > 12:
+            return
+        if isinstance(node, dict):
+            if not root and looks_like_asset(node):
+                url = _url_of(node)
+                name = _name_of(node, url)
+                key = str(node.get("id") or "") or url
+                if key not in seen:
+                    seen.add(key)
+                    found.append({
+                        "asset_id": str(node.get("id") or ""),
+                        "name": name,
+                        "url": url,
+                        "content_type": _ctype_of(node) or "",
+                        "size": _size_of(node),
+                        "found_at": path or "(root)",
+                    })
+                return                      # an asset has no assets inside it
+            for k, v in node.items():
+                if k in SKIP_KEYS:
+                    continue
+                walk(v, f"{path}.{k}" if path else k, depth + 1)
+        elif isinstance(node, list):
+            for i, v in enumerate(node):
+                walk(v, f"{path}[{i}]", depth + 1)
+
+    walk(payload, "", 0, root=True)
+    return found
+
+
+# --- fetching ---------------------------------------------------------------
+
+def fetch_detail(get, kind, rid):
+    for tpl in DETAIL_PATHS_BY_KIND.get(kind, []):
+        d = get_with_retry(get, tpl.format(id=rid))
+        if isinstance(d, dict):
+            if d.get("status") == 404:
+                continue              # this API wraps 404 in a 200
+            return d.get("data") if isinstance(d.get("data"), dict) else d
+        if isinstance(d, list):
+            return d
+    return None
+
+
+def fetch_assets(get, mode, kind, rid):
+    if mode == "detail":
+        return collect_assets(fetch_detail(get, kind, rid) or {})
+    path = mode.format(kp=KIND_PATH[kind], at=KIND_ASSETABLE[kind], id=rid)
+    d = get_with_retry(get, path)
+    if isinstance(d, dict) and d.get("status") == 404:
+        return []
+    return collect_assets(d if isinstance(d, (dict, list)) else {})
+
+
+def sample_jobs(pulled, n):
+    """A spread of transactions across all three kinds, for the probe."""
+    picks = []
+    kinds = [k for k in ("quotes", "salesOrders", "invoices") if pulled.get(k)]
+    if not kinds:
+        return picks
+    per = max(1, n // len(kinds))
+    for kind in kinds:
+        recs = [r for r in pulled[kind] if r.get("id")]
+        if not recs:
+            continue
+        step = max(1, len(recs) // per)
+        picks += [(kind, str(r["id"])) for r in recs[::step][:per]]
+    return picks
+
+
+def discover_asset_mode(get, out_dir, pulled, log, stop):
+    """Find where the assets hang, once, and remember it."""
+    cache = os.path.join(out_dir, "assetsMode.json")
+    if os.path.exists(cache):
+        try:
+            with open(cache, encoding="utf-8") as f:
+                mode = json.load(f).get("mode")
+            if mode:
+                log(f"   asset source (cached): {mode}")
+                return mode
+        except Exception:
+            pass
+
+    probes = sample_jobs(pulled, ASSET_SAMPLES)
+    if not probes:
+        return "detail"
+    log(f">  probing {len(probes)} transactions to find where assets hang")
+
+    probe_dir = os.path.join(out_dir, "_asset_probe")
+    os.makedirs(probe_dir, exist_ok=True)
+    hits, dumped = 0, set()
+    with ThreadPoolExecutor(max_workers=WORKERS) as pool:
+        futures = {pool.submit(fetch_detail, get, k, i): (k, i)
+                   for k, i in probes}
+        for fut in as_completed(futures):
+            if stop.is_set():
+                break
+            kind, rid = futures[fut]
+            try:
+                body = fut.result()
+            except AuthExpired:
+                raise
+            except Exception:
+                continue
+            if not body:
+                continue
+            if kind not in dumped:
+                dumped.add(kind)
+                with open(os.path.join(probe_dir, f"{kind}.json"), "w",
+                          encoding="utf-8") as f:
+                    json.dump(body, f, indent=2, ensure_ascii=False)
+            hits += len(collect_assets(body))
+    if hits:
+        log(f"   assets ride along in the transaction detail "
+            f"({hits} in the sample) — one call per transaction")
+        mode = "detail"
+    else:
+        mode = None
+        for tpl in ASSET_SUBPATHS:
+            found = 0
+            for kind, rid in probes[:10]:
+                if stop.is_set():
+                    break
+                try:
+                    found += len(fetch_assets(get, tpl, kind, rid))
+                except AuthExpired:
+                    raise
+                except Exception:
+                    break
+            if found:
+                log(f"   assets live at /edge/{tpl} ({found} in the sample)")
+                mode = tpl
+                break
+        if not mode:
+            log("!  No assets found in the sample, by any route. Carrying on "
+                "with the detail payload in case the sample was just thin.")
+            log(f"!  One sample payload per kind is in {probe_dir} — send me "
+                f"one that you know has a PDF on it and I'll wire it up.")
+            mode = "detail"
+    try:
+        with open(cache, "w", encoding="utf-8") as f:
+            json.dump({"mode": mode}, f)
+    except Exception:
+        pass
+    return mode
+
+
+# --- downloading ------------------------------------------------------------
+
+def _is_shopvox(url):
+    host = (urllib.parse.urlsplit(url).hostname or "").lower()
+    return host == "shopvox.com" or host.endswith(".shopvox.com")
+
+
+class _DropCookieOffSite(urllib.request.HTTPRedirectHandler):
+    """Asset URLs usually bounce to S3. Your session cookie has no business
+    going there, so it gets dropped the moment we leave shopvox.com."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        new = super().redirect_request(req, fp, code, msg, headers, newurl)
+        if new is not None and not _is_shopvox(newurl):
+            for h in list(new.headers):
+                if h.lower() in ("cookie", "cookie2", "x-shopvox-client"):
+                    del new.headers[h]
+        return new
+
+
+_OPENER = urllib.request.build_opener(_DropCookieOffSite)
+
+BAD_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
+
+
+def safe_filename(name, want_pdf):
+    name = BAD_CHARS.sub("_", (name or "").strip()).strip(". ")
+    if len(name) > 120:
+        stem, ext = os.path.splitext(name)
+        name = stem[:120 - len(ext)] + ext
+    if not name:
+        name = "asset.pdf" if want_pdf else "asset"
+    if want_pdf and not name.lower().endswith(".pdf"):
+        name += ".pdf"
+    return name
+
+
+def unique_path(folder, filename):
+    dest = os.path.join(folder, filename)
+    if not os.path.exists(dest):
+        return dest
+    stem, ext = os.path.splitext(filename)
+    for n in range(2, 500):
+        dest = os.path.join(folder, f"{stem} ({n}){ext}")
+        if not os.path.exists(dest):
+            return dest
+    return os.path.join(folder, f"{stem} ({os.getpid()}){ext}")
+
+
+def download_asset(cookie, url, dest, want_pdf, tries=3):
+    """One file to disk. Returns its size. Written to .part first so a
+    half-finished download never looks like a good one."""
+    url = urllib.parse.urljoin(BASE + "/", url)
+    headers = {"Accept": "*/*", "User-Agent": "Mozilla/5.0",
+               "Referer": "https://express.shopvox.com/"}
+    if _is_shopvox(url):
+        headers["Cookie"] = cookie
+        headers["Origin"] = "https://express.shopvox.com"
+        headers["x-shopvox-client"] = "web"
+
+    last = None
+    for attempt in range(tries):
+        tmp = dest + ".part"
+        try:
+            req = urllib.request.Request(url, headers=headers)
+            with _OPENER.open(req, timeout=DOWNLOAD_TIMEOUT) as r:
+                head = r.read(1024)
+                ctype = (r.headers.get("Content-Type") or "").lower()
+                # A cookie that has just died returns the login page with a
+                # cheerful 200. Catch it here rather than saving HTML as .pdf.
+                if want_pdf and b"%PDF" not in head:
+                    if "html" in ctype or head.lstrip()[:1] == b"<":
+                        raise AuthExpired(
+                            "got a web page instead of a PDF — cookie expired?")
+                    raise ValueError(f"not a PDF (server sent "
+                                     f"{ctype or 'no content type'})")
+                with open(tmp, "wb") as f:
+                    f.write(head)
+                    shutil.copyfileobj(r, f, 1 << 20)
+            os.replace(tmp, dest)
+            return os.path.getsize(dest)
+        except AuthExpired:
+            raise
+        except urllib.error.HTTPError as e:
+            if e.code in (401, 403):
+                raise AuthExpired(f"HTTP {e.code} on the asset URL")
+            last = e
+            if e.code not in (429, 500, 502, 503, 504) or attempt == tries - 1:
+                break
+            time.sleep(2 ** attempt)
+        except Exception as e:                               # noqa: BLE001
+            last = e
+            if attempt == tries - 1:
+                break
+            time.sleep(2 ** attempt)
+        finally:
+            if os.path.exists(tmp):
+                try:
+                    os.remove(tmp)
+                except OSError:
+                    pass
+    raise last if last else RuntimeError("download failed")
+
+
+# --- the stage itself -------------------------------------------------------
+
+def load_saved_lists(out_dir, pulled, log):
+    """Fall back to the .json files from an earlier run, so the assets pass
+    works on its own without re-pulling every list."""
+    out = dict(pulled)
+    for kind in ("quotes", "salesOrders", "invoices"):
+        if out.get(kind):
+            continue
+        path = os.path.join(out_dir, f"{kind}.json")
+        if os.path.exists(path):
+            try:
+                with open(path, encoding="utf-8") as f:
+                    rows = json.load(f)
+                if isinstance(rows, list) and rows:
+                    out[kind] = rows
+                    log(f"   read {len(rows):,} {kind} from {kind}.json")
+            except Exception:
+                continue
+    return out
+
+
+def pull_assets(get, cookie, out_dir, pulled, log, stop, pdf_only=True):
+    pulled = load_saved_lists(out_dir, pulled, log)
+    kinds = [k for k in ("quotes", "salesOrders", "invoices") if pulled.get(k)]
+    if not kinds:
+        log("X  need the quotes / sales orders / invoices lists for this — "
+            "tick them too, or run this in a folder that already has them")
+        return
+
+    folders = build_folder_index(pulled, log)
+    root = os.path.join(out_dir, ASSETS_DIRNAME)
+    os.makedirs(root, exist_ok=True)
+    mode = discover_asset_mode(get, out_dir, pulled, log, stop)
+    if stop.is_set():
+        return
+
+    manifest = os.path.join(out_dir, "assets.jsonl")
+    scanned_log = os.path.join(out_dir, "assetsScanned.jsonl")
+
+    scanned = set()
+    if os.path.exists(scanned_log):
+        with open(scanned_log, encoding="utf-8") as f:
+            for line in f:
+                try:
+                    scanned.add(json.loads(line).get("parent_id"))
+                except json.JSONDecodeError:
+                    continue
+        log(f"   resuming — {len(scanned):,} transactions already checked")
+
+    # What the manifest already accounts for, so retrying a half-done
+    # transaction neither re-downloads nor double-logs.
+    have, noted = set(), set()
+    if os.path.exists(manifest):
+        with open(manifest, encoding="utf-8") as f:
+            for line in f:
+                try:
+                    row = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                key = f"{row.get('folder')}|{row.get('asset_key')}"
+                if row.get("status") == "ok":
+                    have.add(key)
+                elif row.get("status") == "skipped":
+                    noted.add(key)
+
+    jobs = [(k, str(r["id"])) for k in kinds for r in pulled[k]
+            if r.get("id") and str(r["id"]) not in scanned]
+    if not jobs:
+        log("   nothing new to check")
+    else:
+        what = "PDFs only" if pdf_only else "every file type"
+        log(f">  assets for {len(jobs):,} transactions ({what}, "
+            f"{WORKERS} at a time)")
+
+        def one(kind, rid):
+            """Returns (manifest rows, complete?, cookie dead?) for one
+            transaction. A dead cookie is reported rather than raised, so the
+            rows for files that did come down are still written."""
+            folder_name = folders.get((kind, rid)) or f"UNKNOWN-{rid[:8]}"
+            rows, complete, auth_dead = [], True, False
+            for a in fetch_assets(get, mode, kind, rid):
+                key = a["asset_id"] or a["url"]
+                row = dict(a, parent_kind=kind, parent_id=rid,
+                           folder=folder_name, asset_key=key,
+                           saved_as="", status="", note="")
+                want_pdf = is_pdf(a["name"], a["url"], a["content_type"])
+                if pdf_only and not want_pdf:
+                    if f"{folder_name}|{key}" not in noted:
+                        row["status"] = "skipped"
+                        row["note"] = "not a PDF"
+                        rows.append(row)
+                    continue
+                if f"{folder_name}|{key}" in have:
+                    continue          # on disk already, and in the manifest
+                folder = os.path.join(root, folder_name)
+                os.makedirs(folder, exist_ok=True)
+                dest = unique_path(folder,
+                                   safe_filename(a["name"], want_pdf))
+                try:
+                    size = download_asset(cookie, a["url"], dest, want_pdf)
+                    row["status"] = "ok"
+                    row["saved_as"] = os.path.relpath(dest, out_dir)
+                    row["size"] = size or row.get("size", "")
+                except AuthExpired as e:
+                    row["status"] = "failed"
+                    row["note"] = str(e)[:200]
+                    complete, auth_dead = False, True
+                    rows.append(row)
+                    break
+                except Exception as e:                       # noqa: BLE001
+                    row["status"] = "failed"
+                    row["note"] = str(e)[:200]
+                    complete = False
+                rows.append(row)
+            return rows, complete, auth_dead
+
+        saved = skipped = failed = 0
+        seen_folders = set()
+        total_bytes = 0
+        lock = threading.Lock()
+        with open(manifest, "a", encoding="utf-8") as mf, \
+                open(scanned_log, "a", encoding="utf-8") as sf:
+            with ThreadPoolExecutor(max_workers=WORKERS) as pool:
+                futures = {pool.submit(one, k, i): (k, i) for k, i in jobs}
+                for n, fut in enumerate(as_completed(futures), 1):
+                    if stop.is_set():
+                        log("   stopped — progress kept, re-run to continue")
+                        break
+                    kind, rid = futures[fut]
+                    try:
+                        rows, complete, auth_dead = fut.result()
+                    except AuthExpired as e:
+                        log(f"X  {e} — stopping cleanly, progress kept")
+                        break
+                    except Exception:
+                        failed += 1
+                        continue
+                    with lock:
+                        for row in rows:
+                            mf.write(json.dumps(row, ensure_ascii=False) + "\n")
+                            if row["status"] == "ok":
+                                if row["saved_as"]:
+                                    saved += 1
+                                    seen_folders.add(row["folder"])
+                                    if isinstance(row.get("size"), int):
+                                        total_bytes += row["size"]
+                                have.add(f"{row['folder']}|{row['asset_key']}")
+                            elif row["status"] == "skipped":
+                                noted.add(
+                                    f"{row['folder']}|{row['asset_key']}")
+                                skipped += 1
+                            else:
+                                failed += 1
+                        # Only a clean transaction counts as checked, so a
+                        # failed download is retried on the next run.
+                        if complete:
+                            sf.write(json.dumps({"parent_id": rid,
+                                                 "parent_kind": kind}) + "\n")
+                    if auth_dead:
+                        mf.flush()
+                        sf.flush()
+                        log("X  a download came back as a login page — the "
+                            "cookie has expired. Stopped cleanly, progress "
+                            "kept: grab a fresh one and re-run.")
+                        break
+                    if n % 50 == 0:
+                        mf.flush()
+                        sf.flush()
+                        log(f"     {n:,}/{len(jobs):,}  ({saved:,} files into "
+                            f"{len(seen_folders):,} folders, {failed} failed)")
+        log(f"   {saved:,} files saved ({total_bytes / 1e6:,.1f} MB) into "
+            f"{len(seen_folders):,} folders, {skipped:,} skipped, "
+            f"{failed} failed")
+
+    if os.path.exists(manifest):
+        n = csv_from_jsonl(manifest, os.path.join(out_dir, "assets.csv"))
+        log(f"OK assets.csv: {n:,} rows  (every asset seen, downloaded or not)")
+        log(f"OK files are in {root}")
+
+
+# ---------------------------------------------------------------------------
+# GUI
+# ---------------------------------------------------------------------------
+
+class App:
+    def __init__(self, root):
+        self.root = root
+        self.q = queue.Queue()
+        self.stop = threading.Event()
+        root.title("shopVOX Export — everything")
+        root.geometry("760x740")
+
+        pad = {"padx": 10, "pady": 6}
+        frm = ttk.Frame(root)
+        frm.pack(fill="both", expand=True)
+
+        ttk.Label(frm, text=(
+            "1.  Paste your shopVOX cookie  (F12 -> Network -> any "
+            "api.shopvox.com request -> the 'cookie:' header):")
+        ).pack(anchor="w", **pad)
+        self.cookie = scrolledtext.ScrolledText(frm, height=5, wrap="char")
+        self.cookie.pack(fill="x", padx=10)
+
+        row = ttk.Frame(frm); row.pack(fill="x", **pad)
+        ttk.Label(row, text="2.  Save to:").pack(side="left")
+        self.out_var = tk.StringVar(value=os.path.expanduser("~"))
+        ttk.Entry(row, textvariable=self.out_var).pack(
+            side="left", fill="x", expand=True, padx=6)
+        ttk.Button(row, text="Browse...", command=self.browse).pack(side="left")
+
+        ttk.Label(frm, text="3.  Pull:").pack(anchor="w", padx=10)
+        row2 = ttk.Frame(frm); row2.pack(fill="x", padx=20)
+        self.checks = {}
+        for label in TARGETS:
+            v = tk.BooleanVar(value=True)
+            ttk.Checkbutton(row2, text=label, variable=v).pack(side="left", padx=4)
+            self.checks[label] = v
+
+        row3 = ttk.Frame(frm); row3.pack(fill="x", padx=20, pady=(4, 0))
+        self.want_lines = tk.BooleanVar(value=True)
+        ttk.Checkbutton(row3, text="line items  (slow — one call per "
+                        "transaction, resumable)",
+                        variable=self.want_lines).pack(anchor="w")
+        self.want_assets = tk.BooleanVar(value=True)
+        ttk.Checkbutton(row3, text="transaction assets  (saves files into "
+                        "assets/SO51172, assets/QT 58232 — resumable)",
+                        variable=self.want_assets,
+                        command=self.sync_assets).pack(anchor="w")
+        self.pdf_only = tk.BooleanVar(value=True)
+        self.pdf_chk = ttk.Checkbutton(
+            row3, text="        PDFs only  (untick to take every attachment)",
+            variable=self.pdf_only)
+        self.pdf_chk.pack(anchor="w")
+        self.want_addr = tk.BooleanVar(value=False)
+        ttk.Checkbutton(row3, text="company addresses  (untested — if it "
+                        "fails, use Pro's Customers > Export > To CSV)",
+                        variable=self.want_addr).pack(anchor="w")
+
+        row4 = ttk.Frame(frm); row4.pack(fill="x", **pad)
+        ttk.Label(row4, text="per page:").pack(side="left")
+        self.per = tk.StringVar(value="500")
+        ttk.Entry(row4, textvariable=self.per, width=6).pack(side="left", padx=4)
+        self.run_btn = ttk.Button(row4, text="Run export", command=self.start)
+        self.run_btn.pack(side="left", padx=10)
+        self.stop_btn = ttk.Button(row4, text="Stop", command=self.stop.set,
+                                   state="disabled")
+        self.stop_btn.pack(side="left")
+
+        ttk.Label(frm, text="Progress:").pack(anchor="w", padx=10)
+        self.log = scrolledtext.ScrolledText(frm, height=20, state="disabled",
+                                             font=("Consolas", 9))
+        self.log.pack(fill="both", expand=True, padx=10, pady=(0, 6))
+
+        self.open_btn = ttk.Button(frm, text="Open output folder",
+                                   command=self.open_folder)
+        self.open_btn.pack(pady=(0, 8)); self.open_btn.pack_forget()
+        self.root.after(100, self.drain)
+
+    def sync_assets(self):
+        self.pdf_chk.config(
+            state="normal" if self.want_assets.get() else "disabled")
+
+    def browse(self):
+        d = filedialog.askdirectory(initialdir=self.out_var.get())
+        if d:
+            self.out_var.set(d)
+
+    def open_folder(self):
+        d = self.out_var.get()
+        try:
+            if sys.platform.startswith("win"):
+                os.startfile(d)                              # noqa
+            elif sys.platform == "darwin":
+                subprocess.run(["open", d])
+            else:
+                subprocess.run(["xdg-open", d])
+        except Exception:
+            pass
+
+    def put(self, msg):
+        self.q.put(msg)
+
+    def drain(self):
+        try:
+            while True:
+                msg = self.q.get_nowait()
+                if msg == "__DONE__":
+                    self.run_btn.config(state="normal", text="Run export")
+                    self.stop_btn.config(state="disabled")
+                    self.open_btn.pack(pady=(0, 8))
+                else:
+                    self.log.config(state="normal")
+                    self.log.insert("end", msg + "\n")
+                    self.log.see("end")
+                    self.log.config(state="disabled")
+        except queue.Empty:
+            pass
+        self.root.after(100, self.drain)
+
+    def start(self):
+        cookie = self.cookie.get("1.0", "end").strip()
+        if not cookie:
+            messagebox.showwarning("Cookie needed", "Paste your cookie first.")
+            return
+        out_dir = self.out_var.get().strip()
+        if not os.path.isdir(out_dir):
+            messagebox.showwarning("Folder needed", "Choose a valid folder.")
+            return
+        chosen = [l for l, v in self.checks.items() if v.get()]
+        try:
+            per = max(1, int(self.per.get()))
+        except ValueError:
+            per = 500
+
+        self.stop.clear()
+        self.log.config(state="normal"); self.log.delete("1.0", "end")
+        self.log.config(state="disabled")
+        self.open_btn.pack_forget()
+        self.run_btn.config(state="disabled", text="Running...")
+        self.stop_btn.config(state="normal")
+
+        def worker():
+            try:
+                get = make_get(cookie)
+                pulled = {}
+                if chosen:
+                    pulled = pull_lists(get, out_dir, chosen, per, 0.3, self.put)
+                if self.want_lines.get() and not self.stop.is_set():
+                    self.put("")
+                    pull_line_items(get, out_dir, pulled, self.put, self.stop)
+                if self.want_assets.get() and not self.stop.is_set():
+                    self.put("")
+                    pull_assets(get, " ".join(cookie.split()), out_dir,
+                                pulled, self.put, self.stop,
+                                pdf_only=self.pdf_only.get())
+                if self.want_addr.get() and not self.stop.is_set():
+                    self.put("")
+                    pull_company_addresses(get, out_dir, pulled, self.put,
+                                           self.stop)
+                self.put("")
+                self.put("Done. Feed the folder to JASPER's Import from ShopVox.")
+            except AuthExpired as e:
+                self.put(f"X  Auth failed ({e}) — grab a fresh cookie.")
+            except Exception as e:                           # noqa: BLE001
+                self.put(f"X  Unexpected error: {e}")
+            finally:
+                self.put("__DONE__")
+
+        threading.Thread(target=worker, daemon=True).start()
+
+
+if __name__ == "__main__":
+    root = tk.Tk()
+    App(root)
+    root.mainloop()
