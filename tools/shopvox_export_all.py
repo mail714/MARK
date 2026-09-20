@@ -1385,6 +1385,243 @@ def pull_assets(get, cookie, out_dir, pulled, log, stop, pdf_only=True):
 
 
 # ---------------------------------------------------------------------------
+# The manual, shown by the "How this works" button
+# ---------------------------------------------------------------------------
+
+MANUAL = """\
+shopVOX Export — how this works
+
+This pulls your shopVOX data out through the same API the web app uses,
+and saves every PDF attached to a transaction into a folder named after
+that job.
+
+## Quick start
+
+1.  Paste your shopVOX cookie into the box at the top.
+2.  Choose the folder to save into.
+3.  Leave the tick boxes as they are and press Run export.
+
+That is the whole job. It will take a while — there are tens of
+thousands of transactions — but you can stop it and pick it up later.
+See "Stopping and starting again" below, which is the part worth
+reading properly.
+
+## Getting the cookie
+
+The cookie is how shopVOX knows it is you. It is not your password, and
+it expires after a while.
+
+1.  Log into shopVOX in your browser.
+2.  Press F12 to open the developer tools, and click the Network tab.
+3.  Click anything in shopVOX so a request appears in the list. Click a
+    request that goes to api.shopvox.com.
+4.  Find the "cookie:" line under Request Headers and copy the WHOLE
+    value, however long it is.
+5.  Paste it into the box at the top of this program.
+
+!! Treat it like a password. Anyone who has it can act as you in
+!! shopVOX until it expires. Do not paste it into emails or share
+!! screenshots of it.
+
+If the run stops and says the cookie has expired, just fetch a fresh
+one the same way and run it again. Nothing is lost.
+
+## What gets pulled
+
+The tick boxes on the "Pull:" row are the list exports — companies,
+contacts, quotes, sales orders, invoices. Each lands as a .csv and a
+.json in your folder.
+
+Below them:
+
+    line items          one request per transaction. Slow.
+    transaction assets  the PDFs. This is the one you probably want.
+    company addresses   the addresses the list export leaves out.
+
+Under "transaction assets" there is a "PDFs only" box. Leave it ticked
+to take just the PDFs. Untick it to take every attachment — JPEGs,
+Word documents, everything.
+
+!! Leave the quotes, salesOrders and invoices boxes ticked when you run
+!! the assets. It needs those lists to work out which folder each file
+!! belongs in. If they are already in the folder from an earlier run it
+!! will read them from there instead.
+
+## Where the PDFs go
+
+Everything lands under a folder called "assets" inside the folder you
+chose, one sub-folder per job:
+
+    assets/QT 62600/    a quote that never went any further
+    assets/SO60008/     a sales order, and everything leading to it
+
+The rule is that a folder is named after the most recent transaction
+number in the chain.
+
+A job usually starts as a quote, becomes a sales order, and then gets
+invoiced. Quotes have their own numbering, but a sales order and its
+invoice share a number — SO60008 becomes IN60008. So:
+
+    QT62495  ->  SO60008  ->  IN60008     all files go to  assets/SO60008/
+
+That includes files attached to the QUOTE. If the proof was uploaded at
+quote stage and the sales order itself has nothing on it, the proof
+still ends up in the sales order's folder. This is the same thing
+shopVOX shows you under "Related Assets" on the sales order.
+
+A quote that never became anything keeps its own folder, "QT 62600".
+
+If one quote became two sales orders, its files go into both folders,
+so neither job is missing paperwork. It is only downloaded once.
+
+## Stopping and starting again
+
+You can close this program at any time. Nothing is wasted.
+
+It keeps a record of what it has done in two files in your folder:
+
+    assetsScanned.jsonl    transactions it has finished
+    assets.jsonl           every file it has seen, and what happened
+
+Next time you run it, pointing at the SAME folder, it reads those and
+carries on where it stopped. Files already downloaded are not fetched
+again.
+
+!! Keep those .jsonl files. They are the memory. If you delete them it
+!! will download everything a second time, and because the PDFs are
+!! still there you will end up with "Proof (2).pdf" duplicates.
+
+If you delete a PDF yourself, it notices the file has gone and fetches
+that one again on the next run. The folder repairs itself.
+
+A transaction only counts as finished when every one of its files came
+down cleanly. If a download fails, that transaction is left for next
+time, and the files that did arrive are not re-fetched.
+
+The same applies to line items and company addresses, which keep their
+own .jsonl files.
+
+## The two settings
+
+    per page    how many records per request on the list pulls.
+                500 is fine. Lower it if the lists time out.
+
+    at once     how many requests run at the same time. 6 by default,
+                up to 16.
+
+Turning "at once" up makes it faster, to a point. Past about 16 the API
+starts refusing requests and the program has to wait and retry, which
+loses more time than the extra speed gains. If you see the failure
+count climbing in the progress lines, turn it down.
+
+Remember each one of those also downloads files, so 12 at once can mean
+12 PDFs downloading together. That is bandwidth as much as anything.
+
+## Check links (no cookie)
+
+This button answers one question: will every converted quote's files
+end up in its sales order's folder?
+
+It reads the .json files already in your folder. No cookie, no
+internet, nothing downloaded, a couple of seconds.
+
+It tells you how many quotes became sales orders, how many say which
+one, and names any that do not. A quote that has been marked as ordered
+but names no sales order cannot be followed, so its files stay in a QT
+folder. That is usually because the sales order was voided or deleted
+and the flag was left behind. Look the number up in shopVOX and move
+the folder by hand if it turns out to matter.
+
+## What it writes
+
+    companies.csv / .json          the list exports
+    contacts.csv / .json
+    quotes.csv / .json
+    salesOrders.csv / .json
+    invoices.csv / .json
+    lineItems.csv / .jsonl
+    companyAddresses.csv / .jsonl
+
+    assets/                        the PDFs, in job folders
+    assets.csv                     every attachment found, downloaded
+                                   or skipped, and why
+    assets.jsonl                   the record that makes resuming work
+    assetsScanned.jsonl            which transactions are finished
+    assetsMode.json                remembers where the assets live, so
+                                   restarts skip the discovery step
+
+assets.csv is worth a look when it finishes. It lists everything it
+saw, including the files it skipped for not being PDFs, so you can see
+what else is there before deciding whether to fetch the lot.
+
+## When something goes wrong
+
+    "Auth failed" or "cookie expired"
+        Fetch a fresh cookie and run it again. Progress is kept.
+
+    A lot of failures in the progress lines
+        Turn "at once" down and run it again. It will retry whatever
+        did not come down.
+
+    "no endpoint found" on a list
+        shopVOX has renamed something. Tell me which one.
+
+    Nothing found in the sample during the asset probe
+        It leaves example payloads in a folder called _asset_probe.
+        Send me one and I will wire it up.
+
+    It seems to have done nothing
+        Check you picked the right folder, and that the quotes, sales
+        orders and invoices boxes are ticked.
+"""
+
+
+def show_manual(root):
+    """The manual, in its own window. One at a time — clicking again
+    raises the window that is already open rather than stacking another."""
+    existing = getattr(root, "_manual_win", None)
+    try:
+        if existing is not None and existing.winfo_exists():
+            existing.lift()
+            existing.focus_force()
+            return
+    except tk.TclError:
+        pass
+
+    win = tk.Toplevel(root)
+    root._manual_win = win
+    win.title("shopVOX Export — how this works")
+    win.geometry("820x720")
+    win.minsize(560, 400)
+
+    txt = scrolledtext.ScrolledText(win, wrap="word", padx=18, pady=14,
+                                    font=("Segoe UI", 10), background="white")
+    txt.pack(fill="both", expand=True)
+    txt.tag_configure("h", font=("Segoe UI", 13, "bold"),
+                      spacing1=16, spacing3=6)
+    txt.tag_configure("title", font=("Segoe UI", 15, "bold"), spacing3=8)
+    txt.tag_configure("code", font=("Consolas", 9), lmargin1=20, lmargin2=20)
+    txt.tag_configure("warn", font=("Segoe UI", 10, "bold"),
+                      foreground="#9a3412")
+
+    for i, line in enumerate(MANUAL.splitlines()):
+        if i == 0:
+            txt.insert("end", line + "\n", "title")
+        elif line.startswith("## "):
+            txt.insert("end", line[3:] + "\n", "h")
+        elif line.startswith("!! "):
+            txt.insert("end", line[3:] + "\n", "warn")
+        elif line.startswith("    "):
+            txt.insert("end", line + "\n", "code")
+        else:
+            txt.insert("end", line + "\n")
+    txt.config(state="disabled")          # still selectable, just not typable
+
+    ttk.Button(win, text="Close", command=win.destroy).pack(pady=(0, 10))
+    win.bind("<Escape>", lambda e: win.destroy())
+
+
+# ---------------------------------------------------------------------------
 # GUI
 # ---------------------------------------------------------------------------
 
@@ -1394,7 +1631,7 @@ class App:
         self.q = queue.Queue()
         self.stop = threading.Event()
         root.title("shopVOX Export — everything")
-        root.geometry("760x740")
+        root.geometry("820x760")
 
         pad = {"padx": 10, "pady": 6}
         frm = ttk.Frame(root)
@@ -1457,6 +1694,8 @@ class App:
         self.stop_btn.pack(side="left")
         ttk.Button(row4, text="Check links (no cookie)",
                    command=self.audit).pack(side="left", padx=10)
+        ttk.Button(row4, text="How this works",
+                   command=lambda: show_manual(self.root)).pack(side="right")
 
         ttk.Label(frm, text="Progress:").pack(anchor="w", padx=10)
         self.log = scrolledtext.ScrolledText(frm, height=20, state="disabled",
