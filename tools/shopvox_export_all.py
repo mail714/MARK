@@ -99,6 +99,19 @@ class AuthExpired(Exception):
     """Cookie no longer valid — stop cleanly so progress is kept."""
 
 
+def shutdown_now(pool):
+    """Drop queued work instead of waiting for it.
+
+    Leaving a ThreadPoolExecutor by its 'with' block waits for every job
+    already submitted, so breaking out of the loop on Stop still sat
+    through all thirty-odd thousand of them. That is what made the Stop
+    button look dead."""
+    try:
+        pool.shutdown(wait=False, cancel_futures=True)
+    except TypeError:                     # Python 3.8 and older
+        pool.shutdown(wait=False)
+
+
 def make_get(cookie):
     cookie = " ".join(cookie.split())
 
@@ -226,7 +239,7 @@ def csv_from_jsonl(jsonl_path, csv_path):
 # Stage 1 — the list endpoints
 # ---------------------------------------------------------------------------
 
-def pull_lists(get, out_dir, chosen, per, gap, log):
+def pull_lists(get, out_dir, chosen, per, gap, log, stop=None):
     """Returns {target: [records]} for whatever was pulled."""
     pulled = {}
     for label in chosen:
@@ -256,6 +269,9 @@ def pull_lists(get, out_dir, chosen, per, gap, log):
             log(f"     page {page}/{meta.get('totalPages', '?')}  "
                 f"({len(rows)}/{meta.get('totalCount', '?')})")
             if not meta.get("hasNextPage"):
+                break
+            if stop is not None and stop.is_set():
+                log("   stopped")
                 break
             page += 1
             time.sleep(gap)
@@ -341,9 +357,15 @@ def pull_line_items(get, out_dir, pulled, log, stop):
             f"({WORKERS} at a time)")
         written = failed = 0
         lock = threading.Lock()
+        def one_lines(kind, rid):
+            if stop.is_set():
+                return [], "stopped"      # queued work exits without calling
+            return fetch_lines(get, kind, rid)
+
         with open(jsonl, "a", encoding="utf-8") as fh:
-            with ThreadPoolExecutor(max_workers=WORKERS) as pool:
-                futures = {pool.submit(fetch_lines, get, k, i): (k, i)
+            pool = ThreadPoolExecutor(max_workers=WORKERS)
+            try:
+                futures = {pool.submit(one_lines, k, i): (k, i)
                            for k, i in jobs}
                 for n, fut in enumerate(as_completed(futures), 1):
                     if stop.is_set():
@@ -365,13 +387,16 @@ def pull_line_items(get, out_dir, pulled, log, stop):
                         with lock:
                             for ln in lines:
                                 fh.write(json.dumps(ln, ensure_ascii=False) + "\n")
+                            fh.flush()    # survive a force-quit
                             written += len(lines)
-                    else:
+                    elif status != "stopped":
                         failed += 1
                     if n % 100 == 0:
-                        fh.flush()
                         log(f"     {n:,}/{len(jobs):,}  "
                             f"({written:,} lines, {failed} failed)")
+            finally:
+                shutdown_now(pool)
+                fh.flush()
         log(f"   {written:,} lines written, {failed} transactions failed")
 
     if os.path.exists(jsonl):
@@ -406,6 +431,8 @@ def pull_company_addresses(get, out_dir, pulled, log, stop):
         log(f">  addresses for {len(jobs):,} companies")
 
         def one(cid):
+            if stop.is_set():
+                return []
             for tpl in COMPANY_DETAIL_PATHS:
                 d = get_with_retry(get, tpl.format(id=cid))
                 if isinstance(d, dict) and d.get("status") == 404:
@@ -426,7 +453,8 @@ def pull_company_addresses(get, out_dir, pulled, log, stop):
         written = failed = 0
         lock = threading.Lock()
         with open(jsonl, "a", encoding="utf-8") as fh:
-            with ThreadPoolExecutor(max_workers=WORKERS) as pool:
+            pool = ThreadPoolExecutor(max_workers=WORKERS)
+            try:
                 futures = {pool.submit(one, cid): cid for cid in jobs}
                 for n, fut in enumerate(as_completed(futures), 1):
                     if stop.is_set():
@@ -444,10 +472,13 @@ def pull_company_addresses(get, out_dir, pulled, log, stop):
                         with lock:
                             for r in rows:
                                 fh.write(json.dumps(r, ensure_ascii=False) + "\n")
+                            fh.flush()
                             written += len(rows)
                     if n % 100 == 0:
-                        fh.flush()
                         log(f"     {n:,}/{len(jobs):,}  ({written:,} addresses)")
+            finally:
+                shutdown_now(pool)
+                fh.flush()
         log(f"   {written:,} addresses, {failed} companies failed")
         if not written:
             log("!  Nothing came back. Use shopVOX Pro's own")
@@ -993,7 +1024,8 @@ def discover_asset_mode(get, out_dir, pulled, log, stop):
     probe_dir = os.path.join(out_dir, "_asset_probe")
     os.makedirs(probe_dir, exist_ok=True)
     hits, dumped = 0, set()
-    with ThreadPoolExecutor(max_workers=WORKERS) as pool:
+    pool = ThreadPoolExecutor(max_workers=WORKERS)
+    try:
         futures = {pool.submit(fetch_detail, get, k, i): (k, i)
                    for k, i in probes}
         for fut in as_completed(futures):
@@ -1014,6 +1046,10 @@ def discover_asset_mode(get, out_dir, pulled, log, stop):
                           encoding="utf-8") as f:
                     json.dump(body, f, indent=2, ensure_ascii=False)
             hits += len(collect_assets(body))
+    finally:
+        shutdown_now(pool)
+    if stop.is_set():
+        return "detail"
     if hits:
         log(f"   assets ride along in the transaction detail "
             f"({hits} in the sample) — one call per transaction")
@@ -1255,6 +1291,10 @@ def pull_assets(get, cookie, out_dir, pulled, log, stop, pdf_only=True):
                 elif row.get("status") == "skipped":
                     noted.add(key)
 
+    if have or noted:
+        log(f"   {len(have):,} files already downloaded, {len(noted):,} "
+            f"skipped previously — these are not fetched again")
+
     jobs = [(k, str(r["id"])) for k in kinds for r in pulled[k]
             if r.get("id") and str(r["id"]) not in scanned]
     if not jobs:
@@ -1268,9 +1308,14 @@ def pull_assets(get, cookie, out_dir, pulled, log, stop, pdf_only=True):
             """Returns (manifest rows, complete?, cookie dead?) for one
             transaction. A dead cookie is reported rather than raised, so the
             rows for files that did come down are still written."""
+            if stop.is_set():
+                return [], False, False   # queued work exits without calling
             folder_names = folders.get((kind, rid)) or [f"UNKNOWN-{rid[:8]}"]
             rows, complete, auth_dead = [], True, False
             for a in fetch_assets(get, mode, kind, rid):
+                if stop.is_set():
+                    complete = False      # unfinished, so it is retried
+                    break
                 key = a["asset_id"] or a["url"]
                 want_pdf = is_pdf(a["name"], a["url"], a["content_type"])
                 # A quote that fed two sales orders belongs in both folders.
@@ -1325,7 +1370,8 @@ def pull_assets(get, cookie, out_dir, pulled, log, stop, pdf_only=True):
         lock = threading.Lock()
         with open(manifest, "a", encoding="utf-8") as mf, \
                 open(scanned_log, "a", encoding="utf-8") as sf:
-            with ThreadPoolExecutor(max_workers=WORKERS) as pool:
+            pool = ThreadPoolExecutor(max_workers=WORKERS)
+            try:
                 futures = {pool.submit(one, k, i): (k, i) for k, i in jobs}
                 for n, fut in enumerate(as_completed(futures), 1):
                     if stop.is_set():
@@ -1362,18 +1408,22 @@ def pull_assets(get, cookie, out_dir, pulled, log, stop, pdf_only=True):
                         if complete:
                             sf.write(json.dumps({"parent_id": rid,
                                                  "parent_kind": kind}) + "\n")
-                    if auth_dead:
+                        # Flushed per transaction, not per fifty: a force-quit
+                        # must not cost work that is already on disk.
                         mf.flush()
                         sf.flush()
+                    if auth_dead:
                         log("X  a download came back as a login page — the "
                             "cookie has expired. Stopped cleanly, progress "
                             "kept: grab a fresh one and re-run.")
                         break
                     if n % 50 == 0:
-                        mf.flush()
-                        sf.flush()
                         log(f"     {n:,}/{len(jobs):,}  ({saved:,} files into "
                             f"{len(seen_folders):,} folders, {failed} failed)")
+            finally:
+                shutdown_now(pool)
+                mf.flush()
+                sf.flush()
         log(f"   {saved:,} files saved ({total_bytes / 1e6:,.1f} MB) into "
             f"{len(seen_folders):,} folders, {skipped:,} skipped, "
             f"{failed} failed")
@@ -1689,7 +1739,8 @@ class App:
                     textvariable=self.workers_var).pack(side="left", padx=4)
         self.run_btn = ttk.Button(row4, text="Run export", command=self.start)
         self.run_btn.pack(side="left", padx=10)
-        self.stop_btn = ttk.Button(row4, text="Stop", command=self.stop.set,
+        self.stop_btn = ttk.Button(row4, text="Stop",
+                                   command=self.request_stop,
                                    state="disabled")
         self.stop_btn.pack(side="left")
         ttk.Button(row4, text="Check links (no cookie)",
@@ -1737,7 +1788,7 @@ class App:
                 msg = self.q.get_nowait()
                 if msg == "__DONE__":
                     self.run_btn.config(state="normal", text="Run export")
-                    self.stop_btn.config(state="disabled")
+                    self.stop_btn.config(state="disabled", text="Stop")
                     self.open_btn.pack(pady=(0, 8))
                 else:
                     self.log.config(state="normal")
@@ -1747,6 +1798,12 @@ class App:
         except queue.Empty:
             pass
         self.root.after(100, self.drain)
+
+    def request_stop(self):
+        """Stop finishes what is already in flight, then bails out — a few
+        seconds, not the whole queue."""
+        self.stop.set()
+        self.stop_btn.config(state="disabled", text="Stopping...")
 
     def audit(self):
         """The link check on its own — no cookie, no network."""
@@ -1800,7 +1857,8 @@ class App:
                 get = make_get(cookie)
                 pulled = {}
                 if chosen:
-                    pulled = pull_lists(get, out_dir, chosen, per, 0.3, self.put)
+                    pulled = pull_lists(get, out_dir, chosen, per, 0.3,
+                                        self.put, self.stop)
                 if self.want_lines.get() and not self.stop.is_set():
                     self.put("")
                     pull_line_items(get, out_dir, pulled, self.put, self.stop)
