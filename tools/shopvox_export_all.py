@@ -1190,6 +1190,24 @@ def load_saved_lists(out_dir, pulled, log):
     return out
 
 
+def audit_links(out_dir, log):
+    """Will every converted quote reach its sales order's folder?
+
+    Reads the .json files a previous run wrote — no cookie, no network,
+    nothing downloaded. Worth a few seconds before a long asset run."""
+    pulled = load_saved_lists(out_dir, {}, log)
+    if not pulled.get("quotes"):
+        log("X  no quotes.json in this folder. Tick the list pulls and run "
+            "the export once first, or choose the folder that has them.")
+        return
+    log(f">  {len(pulled.get('quotes') or []):,} quotes, "
+        f"{len(pulled.get('salesOrders') or []):,} sales orders, "
+        f"{len(pulled.get('invoices') or []):,} invoices")
+    build_folder_index(pulled, log)
+    log("")
+    log("   Nothing was downloaded — this only checks where files WOULD go.")
+
+
 def pull_assets(get, cookie, out_dir, pulled, log, stop, pdf_only=True):
     pulled = load_saved_lists(out_dir, pulled, log)
     kinds = [k for k in ("quotes", "salesOrders", "invoices") if pulled.get(k)]
@@ -1428,6 +1446,8 @@ class App:
         self.stop_btn = ttk.Button(row4, text="Stop", command=self.stop.set,
                                    state="disabled")
         self.stop_btn.pack(side="left")
+        ttk.Button(row4, text="Check links (no cookie)",
+                   command=self.audit).pack(side="left", padx=10)
 
         ttk.Label(frm, text="Progress:").pack(anchor="w", padx=10)
         self.log = scrolledtext.ScrolledText(frm, height=20, state="disabled",
@@ -1479,6 +1499,25 @@ class App:
         except queue.Empty:
             pass
         self.root.after(100, self.drain)
+
+    def audit(self):
+        """The link check on its own — no cookie, no network."""
+        out_dir = self.out_var.get().strip()
+        if not os.path.isdir(out_dir):
+            messagebox.showwarning("Folder needed", "Choose a valid folder.")
+            return
+        self.log.config(state="normal"); self.log.delete("1.0", "end")
+        self.log.config(state="disabled")
+
+        def worker():
+            try:
+                audit_links(out_dir, self.put)
+            except Exception as e:                           # noqa: BLE001
+                self.put(f"X  {e}")
+            finally:
+                self.put("__DONE__")
+
+        threading.Thread(target=worker, daemon=True).start()
 
     def start(self):
         cookie = self.cookie.get("1.0", "end").strip()
