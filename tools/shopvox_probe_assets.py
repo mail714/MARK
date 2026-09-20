@@ -347,6 +347,26 @@ PROBE_PATHS = [
     "assets?txnId={id}",
 ]
 
+# If no field holds the link, it may be served by its own endpoint. These
+# are probed and anything they return is checked for ids of OTHER
+# transactions, which is what a relationship looks like from out here.
+RELATION_PATHS = [
+    "{kp}/{id}/quote",
+    "{kp}/{id}/quotes",
+    "{kp}/{id}/related",
+    "{kp}/{id}/related_transactions",
+    "{kp}/{id}/relatedTransactions",
+    "{kp}/{id}/linked_transactions",
+    "{kp}/{id}/history",
+    "{kp}/{id}/activities",
+    "{kp}/{id}/audits",
+    "{kp}/{id}/notes",
+    "transactions/{kp}/{id}/quote",
+    "quotes?salesOrderId={id}",
+    "quotes?workOrderId={id}",
+    "work_orders?quoteId={id}",
+]
+
 PREFIX_KIND = {"QT": "quotes", "EST": "quotes", "SO": "salesOrders",
                "WO": "salesOrders", "IN": "invoices", "INV": "invoices"}
 
@@ -473,6 +493,36 @@ def load_index(folder):
     return idx
 
 
+def walk_uuids(node, path="", depth=0, out=None):
+    """Every uuid-looking value in a payload, with where it was found."""
+    if out is None:
+        out = []
+    if depth > 10:
+        return out
+    if isinstance(node, dict):
+        for k, v in node.items():
+            walk_uuids(v, f"{path}.{k}" if path else k, depth + 1, out)
+    elif isinstance(node, list):
+        for i, v in enumerate(node):
+            walk_uuids(v, f"{path}[{i}]", depth + 1, out)
+    elif isinstance(node, str) and UUID_RE.match(node):
+        out.append((path, node))
+    return out
+
+
+def resolved_refs(payload, idx, rid):
+    """Ids in this payload that belong to OTHER transactions — which is what
+    a link looks like, whatever the field happens to be called."""
+    hits, seen = [], set()
+    for path, uid in walk_uuids(payload):
+        if uid == rid or uid in seen or uid not in idx:
+            continue
+        seen.add(uid)
+        kind2, num2 = idx[uid]
+        hits.append((path, uid, kind2, num2))
+    return hits
+
+
 def chain_report(folder, rid, rec, body, log):
     """Which field ties this transaction to its quote / order / invoice.
 
@@ -491,6 +541,11 @@ def chain_report(folder, rid, rec, body, log):
     else:
         say("   (no .json files here, so ids can't be named — run the main "
             "exporter into this folder first to get more out of this)")
+    # The decisive test: does any id in here belong to another transaction?
+    for source, obj in (("list", rec), ("detail", body)):
+        for path, uid, kind2, num2 in resolved_refs(obj, idx, rid):
+            say(f"   {source:>6}  {path} -> {num2} ({kind2})   <-- A LINK")
+
     hits = 0
     for source, obj in (("list", rec), ("detail", body)):
         if not isinstance(obj, dict):
@@ -625,6 +680,35 @@ def probe(cookie, folder, wanted, log):
                 "id that does not exist, so it is serving the whole account, "
                 "not this transaction.")
 
+    # 2b. endpoints that might serve the link instead
+    log("")
+    log(">  2b. endpoints that might carry the quote/order relationship")
+    idx = load_index(folder)
+    rel_hits = []
+    for tpl in RELATION_PATHS:
+        path = tpl.format(kp=kp, at=at, id=rid)
+        try:
+            d = get_with_retry(get, path, tries=1)
+        except urllib.error.HTTPError as e:
+            log(f"   {e.code:>3}  /edge/{path}")
+            continue
+        except AuthExpired:
+            raise
+        except Exception:
+            continue
+        if isinstance(d, dict) and d.get("status") == 404:
+            log(f"   404  /edge/{path}  (wrapped in a 200)")
+            continue
+        raw[path] = d
+        refs = resolved_refs(d, idx, rid)
+        log(f"   200  /edge/{path}  ({summarise(d)})")
+        for p2, uid, kind2, num2 in refs[:5]:
+            log(f"        {p2} -> {num2} ({kind2})   <-- A LINK")
+        if refs:
+            rel_hits.append(tpl)
+    if not rel_hits:
+        log("   -  none of them name another transaction")
+
     # 3. the verdict
     log("")
     if detail_hits:
@@ -664,7 +748,9 @@ def probe(cookie, folder, wanted, log):
         f.write(f"endpoints that ignore the filter: {unfiltered or 'none'}\n")
         f.write(f"endpoints with the right shape but empty: {empty or 'none'}\n\n")
         f.write("=== how this transaction links to others ===\n")
-        f.write("\n".join(chain_lines) + "\n\n")
+        f.write("\n".join(chain_lines) + "\n")
+        f.write(f"relationship endpoints naming another transaction: "
+                f"{rel_hits or 'none'}\n\n")
         f.write("=== detail payload ===\n")
         f.write(json.dumps(skeleton(body), indent=2))
         f.write("\n\n=== endpoints that returned something ===\n")
