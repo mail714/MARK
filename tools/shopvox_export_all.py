@@ -1238,8 +1238,10 @@ def pull_assets(get, cookie, out_dir, pulled, log, stop, pdf_only=True):
         log(f"   resuming — {len(scanned):,} transactions already checked")
 
     # What the manifest already accounts for, so retrying a half-done
-    # transaction neither re-downloads nor double-logs.
-    have, noted = set(), set()
+    # transaction neither re-downloads nor double-logs. 'have' keeps each
+    # file's path, not just its key, so a file deleted off disk since the
+    # last run is fetched again rather than assumed present.
+    have, noted = {}, set()
     if os.path.exists(manifest):
         with open(manifest, encoding="utf-8") as f:
             for line in f:
@@ -1249,7 +1251,7 @@ def pull_assets(get, cookie, out_dir, pulled, log, stop, pdf_only=True):
                     continue
                 key = f"{row.get('folder')}|{row.get('asset_key')}"
                 if row.get("status") == "ok":
-                    have.add(key)
+                    have[key] = row.get("saved_as") or ""
                 elif row.get("status") == "skipped":
                     noted.add(key)
 
@@ -1284,8 +1286,9 @@ def pull_assets(get, cookie, out_dir, pulled, log, stop, pdf_only=True):
                             row["note"] = "not a PDF"
                             rows.append(row)
                         continue
-                    if f"{folder_name}|{key}" in have:
-                        continue      # on disk already, and in the manifest
+                    prev = have.get(f"{folder_name}|{key}")
+                    if prev and os.path.exists(os.path.join(out_dir, prev)):
+                        continue      # already on disk, and in the manifest
                     folder = os.path.join(root, folder_name)
                     os.makedirs(folder, exist_ok=True)
                     dest = unique_path(folder,
@@ -1346,7 +1349,8 @@ def pull_assets(get, cookie, out_dir, pulled, log, stop, pdf_only=True):
                                     seen_folders.add(row["folder"])
                                     if isinstance(row.get("size"), int):
                                         total_bytes += row["size"]
-                                have.add(f"{row['folder']}|{row['asset_key']}")
+                                have[f"{row['folder']}|"
+                                     f"{row['asset_key']}"] = row["saved_as"]
                             elif row["status"] == "skipped":
                                 noted.add(
                                     f"{row['folder']}|{row['asset_key']}")
