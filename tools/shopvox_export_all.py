@@ -512,6 +512,12 @@ ASSET_SUBPATHS = [
 # filtering by id at all and anything it returns is the wrong transaction's.
 BOGUS_ID = "00000000-0000-0000-0000-000000000000"
 ASSET_SAMPLES = 40          # transactions read during discovery
+ASSETS_PER_PAGE = 200       # the default is 10, which silently truncates
+
+# A response that carries one of these lists is the assets collection, even
+# when the list is empty — which is how we tell "this endpoint exists and
+# this transaction has no files" from "wrong endpoint".
+ASSET_COLLECTION_KEYS = ("assets", "attachments", "files", "documents", "data")
 DOWNLOAD_TIMEOUT = 180      # seconds per file — proofs can be fat
 
 # --- reading a transaction number off a record -----------------------------
@@ -697,7 +703,8 @@ URL_KEYS = ("url", "fileUrl", "assetUrl", "downloadUrl", "publicUrl",
             "attachment", "asset", "document", "path")
 NESTED_URL_KEYS = ("url", "original", "originalUrl", "downloadUrl", "href",
                    "large", "public")
-CTYPE_KEYS = ("fileContentType", "contentType", "mimeType", "mime", "type")
+CTYPE_KEYS = ("fileMimetype", "fileContentType", "contentType", "mimeType",
+               "mime", "type")
 SIZE_KEYS = ("fileFileSize", "fileSize", "size", "byteSize", "bytes")
 # Branding and UI chrome — never the customer's artwork.
 SKIP_KEYS = {"logo", "companyLogo", "avatar", "profileImage", "signature",
@@ -868,14 +875,42 @@ def endpoint_filters(get, tpl, kind):
     return not collect_assets(d if isinstance(d, (dict, list)) else {})
 
 
+def is_asset_collection(d):
+    if isinstance(d, list):
+        return True
+    return isinstance(d, dict) and any(
+        isinstance(d.get(k), list) for k in ASSET_COLLECTION_KEYS)
+
+
+def fetch_assets_page(get, mode, kind, rid, page):
+    base = mode.format(kp=KIND_PATH[kind], at=KIND_ASSETABLE[kind], id=rid)
+    sep = "&" if "?" in base else "?"
+    return get_with_retry(get, f"{base}{sep}page={page}"
+                               f"&perPage={ASSETS_PER_PAGE}")
+
+
 def fetch_assets(get, mode, kind, rid):
+    """Every asset on one transaction, following the pages to the end.
+
+    The collection is paged — ten per page by default — so a transaction
+    with more attachments than that would otherwise come back short."""
     if mode == "detail":
         return collect_assets(fetch_detail(get, kind, rid) or {})
-    path = mode.format(kp=KIND_PATH[kind], at=KIND_ASSETABLE[kind], id=rid)
-    d = get_with_retry(get, path)
-    if isinstance(d, dict) and d.get("status") == 404:
-        return []
-    return collect_assets(d if isinstance(d, (dict, list)) else {})
+    out, seen, page = [], set(), 1
+    while page <= 50:
+        d = fetch_assets_page(get, mode, kind, rid, page)
+        if isinstance(d, dict) and d.get("status") == 404:
+            break
+        for a in collect_assets(d if isinstance(d, (dict, list)) else {}):
+            key = a["asset_id"] or a["url"]
+            if key not in seen:
+                seen.add(key)
+                out.append(a)
+        meta = d.get("meta") if isinstance(d, dict) else None
+        if not (isinstance(meta, dict) and meta.get("hasNextPage")):
+            break
+        page += 1
+    return out
 
 
 def sample_jobs(pulled, n):
@@ -943,25 +978,34 @@ def discover_asset_mode(get, out_dir, pulled, log, stop):
     else:
         mode = None
         for tpl in ASSET_SUBPATHS:
-            found, kinds_tried = 0, set()
+            found, shaped, kinds_tried = 0, False, set()
             for kind, rid in probes[:10]:
                 if stop.is_set():
                     break
                 try:
-                    found += len(fetch_assets(get, tpl, kind, rid))
-                    kinds_tried.add(kind)
+                    d = fetch_assets_page(get, tpl, kind, rid, 1)
+                    if isinstance(d, dict) and d.get("status") == 404:
+                        continue
+                    # An empty collection still proves the endpoint is real;
+                    # plenty of transactions simply have no files on them.
+                    if is_asset_collection(d):
+                        shaped = True
+                        kinds_tried.add(kind)
+                    found += len(collect_assets(
+                        d if isinstance(d, (dict, list)) else {}))
                 except AuthExpired:
                     raise
                 except Exception:
                     break
-            if not found:
+            if not shaped:
                 continue
             if not all(endpoint_filters(get, tpl, k) for k in kinds_tried):
                 log(f"   !  /edge/{tpl} answers, but returns the same files "
                     f"for an id that does not exist — it is not filtering by "
                     f"transaction. Ignoring it.")
                 continue
-            log(f"   assets live at /edge/{tpl} ({found} in the sample)")
+            log(f"   assets live at /edge/{tpl} "
+                f"({found} in the sample of {len(probes[:10])})")
             mode = tpl
             break
         if not mode:

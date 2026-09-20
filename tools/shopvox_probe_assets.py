@@ -121,6 +121,10 @@ KIND_ASSETABLE = {"quotes": "Quote", "salesOrders": "WorkOrder",
 
 BOGUS_ID = "00000000-0000-0000-0000-000000000000"
 
+ASSETS_PER_PAGE = 200       # the default is 10, which silently truncates
+
+ASSET_COLLECTION_KEYS = ("assets", "attachments", "files", "documents", "data")
+
 NUMBER_KEYS = ("txnNumber", "transactionNumber", "number", "quoteNumber",
                "salesOrderNumber", "workOrderNumber", "invoiceNumber",
                "orderNumber", "docNumber", "name", "title")
@@ -153,7 +157,8 @@ URL_KEYS = ("url", "fileUrl", "assetUrl", "downloadUrl", "publicUrl",
 NESTED_URL_KEYS = ("url", "original", "originalUrl", "downloadUrl", "href",
                    "large", "public")
 
-CTYPE_KEYS = ("fileContentType", "contentType", "mimeType", "mime", "type")
+CTYPE_KEYS = ("fileMimetype", "fileContentType", "contentType", "mimeType",
+               "mime", "type")
 
 SIZE_KEYS = ("fileFileSize", "fileSize", "size", "byteSize", "bytes")
 
@@ -308,6 +313,18 @@ def endpoint_filters(get, tpl, kind):
         return True
     return not collect_assets(d if isinstance(d, (dict, list)) else {})
 
+def is_asset_collection(d):
+    if isinstance(d, list):
+        return True
+    return isinstance(d, dict) and any(
+        isinstance(d.get(k), list) for k in ASSET_COLLECTION_KEYS)
+
+def fetch_assets_page(get, mode, kind, rid, page):
+    base = mode.format(kp=KIND_PATH[kind], at=KIND_ASSETABLE[kind], id=rid)
+    sep = "&" if "?" in base else "?"
+    return get_with_retry(get, f"{base}{sep}page={page}"
+                               f"&perPage={ASSETS_PER_PAGE}")
+
 # ---------------------------------------------------------------------------
 # The probe itself
 # ---------------------------------------------------------------------------
@@ -457,13 +474,22 @@ def load_index(folder):
 
 
 def chain_report(folder, rid, rec, body, log):
-    """Which field ties this transaction to its quote / order / invoice."""
+    """Which field ties this transaction to its quote / order / invoice.
+
+    Returns the lines as well as logging them, so they land in the
+    STRUCTURE file — this is the part that needs sharing."""
+    out = []
+
+    def say(line):
+        out.append(line)
+        log(line)
+
     idx = load_index(folder)
     if idx:
-        log(f"   ({len(idx):,} transactions in this folder's .json files to "
+        say(f"   ({len(idx):,} transactions in this folder's .json files to "
             f"resolve ids against)")
     else:
-        log("   (no .json files here, so ids can't be named — run the main "
+        say("   (no .json files here, so ids can't be named — run the main "
             "exporter into this folder first to get more out of this)")
     hits = 0
     for source, obj in (("list", rec), ("detail", body)):
@@ -488,12 +514,13 @@ def chain_report(folder, rid, rec, body, log):
             elif vid in idx:
                 kind2, num2 = idx[vid]
                 note = f"   <-- that is {num2} ({kind2})"
-            log(f"   {source:>6}  {k} = {shown}{note}")
+            say(f"   {source:>6}  {k} = {shown}{note}")
             hits += 1
     if not hits:
-        log("   -  nothing on this record references another transaction")
-        log("      If this is a quote that DID become a sales order, that is "
+        say("   -  nothing on this record references another transaction")
+        say("      If this is a quote that DID become a sales order, that is "
             "the problem — tell me and I'll look at the full dump.")
+    return out
 
 
 def summarise(d):
@@ -530,7 +557,7 @@ def probe(cookie, folder, wanted, log):
     log("")
     log(">  0. how this transaction links to its quote / order / invoice")
     chain_pre = fetch_detail(get, kind, rid)
-    chain_report(folder, rid, rec, chain_pre, log)
+    chain_lines = chain_report(folder, rid, rec, chain_pre, log)
 
     # 1. does it ride along in the detail payload?
     log("")
@@ -636,6 +663,8 @@ def probe(cookie, folder, wanted, log):
         f.write(f"endpoints that filter properly: {good or 'none'}\n")
         f.write(f"endpoints that ignore the filter: {unfiltered or 'none'}\n")
         f.write(f"endpoints with the right shape but empty: {empty or 'none'}\n\n")
+        f.write("=== how this transaction links to others ===\n")
+        f.write("\n".join(chain_lines) + "\n\n")
         f.write("=== detail payload ===\n")
         f.write(json.dumps(skeleton(body), indent=2))
         f.write("\n\n=== endpoints that returned something ===\n")
