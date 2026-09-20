@@ -558,6 +558,10 @@ SO_OBJ_KEYS = ("salesOrder", "workOrder", "order", "convertedTo",
                "transaction")
 CONVERTED_HINTS = ("convert", "won", "ordered", "sales order", "work order")
 STATUS_KEYS = ("status", "state", "quoteStatus", "workflowState", "stage")
+# THE link, confirmed against the live API: a quote's LIST record carries an
+# array of the sales orders it became. It is not in the detail payload, and
+# no field on the sales order points back, so this is the only route.
+QUOTE_CHILD_KEYS = ("salesOrders", "workOrders", "orders", "invoices")
 
 
 def ref_id(rec, id_keys, obj_keys):
@@ -584,7 +588,24 @@ def ref_number(rec, obj_keys):
     return None
 
 
+def child_numbers(rec, so_num_by_id, inv_num_by_id):
+    """The numbers of the sales orders / invoices a quote turned into."""
+    out = []
+    for k in QUOTE_CHILD_KEYS:
+        for item in (rec.get(k) or []) if isinstance(rec.get(k), list) else []:
+            if not isinstance(item, dict):
+                continue
+            iid = str(item.get("id") or "")
+            num = (so_num_by_id.get(iid) or inv_num_by_id.get(iid)
+                   or txn_number(item))
+            if num and num not in out:
+                out.append(num)
+    return out
+
+
 def looks_converted(rec):
+    if rec.get("ordered") is True or rec.get("invoiced") is True:
+        return True
     for k in STATUS_KEYS:
         v = rec.get(k)
         if isinstance(v, str) and any(h in v.lower() for h in CONVERTED_HINTS):
@@ -630,27 +651,41 @@ def build_folder_index(pulled, log):
         if q and num:
             so_num_by_quote.setdefault(q, num)
 
+    # Each transaction maps to a LIST of folders: normally one, but a quote
+    # that became two sales orders belongs in both, so its paperwork is
+    # complete in each.
     folders, how = {}, {}
     for r in sos:
         rid = str(r.get("id") or "")
         if rid:
             num = so_num_by_id.get(rid)
-            folders[("salesOrders", rid)] = (
+            folders[("salesOrders", rid)] = [
                 ASSET_FOLDER_SO.format(num=num) if num
-                else f"UNKNOWN-SO-{rid[:8]}")
+                else f"UNKNOWN-SO-{rid[:8]}"]
     for r in invoices:
         rid = str(r.get("id") or "")
         if rid:
             num = inv_num_by_id.get(rid)
-            folders[("invoices", rid)] = (
+            folders[("invoices", rid)] = [
                 ASSET_FOLDER_SO.format(num=num) if num
-                else f"UNKNOWN-INV-{rid[:8]}")
+                else f"UNKNOWN-INV-{rid[:8]}"]
 
-    to_so = to_qt = orphaned = 0
+    to_so = to_qt = orphaned = multi = 0
     for r in quotes:
         rid = str(r.get("id") or "")
         if not rid:
             continue
+        # The confirmed route first: the orders listed on the quote itself.
+        nums = child_numbers(r, so_num_by_id, inv_num_by_id)
+        if nums:
+            folders[("quotes", rid)] = [ASSET_FOLDER_SO.format(num=n)
+                                        for n in nums]
+            to_so += 1
+            multi += 1 if len(nums) > 1 else 0
+            how["the orders listed on the quote"] = how.get(
+                "the orders listed on the quote", 0) + 1
+            continue
+
         num = why = None
         if rid in so_num_by_id:
             num, why = so_num_by_id[rid], "same id as a sales order"
@@ -670,13 +705,13 @@ def build_folder_index(pulled, log):
             # a different sequence than a sales order's, so equal numbers
             # mean two unrelated jobs, not a conversion.
         if num:
-            folders[("quotes", rid)] = ASSET_FOLDER_SO.format(num=num)
+            folders[("quotes", rid)] = [ASSET_FOLDER_SO.format(num=num)]
             to_so += 1
             how[why] = how.get(why, 0) + 1
         else:
             qn = txn_number(r)
-            folders[("quotes", rid)] = (ASSET_FOLDER_QT.format(num=qn) if qn
-                                        else f"UNKNOWN-QT-{rid[:8]}")
+            folders[("quotes", rid)] = [ASSET_FOLDER_QT.format(num=qn) if qn
+                                        else f"UNKNOWN-QT-{rid[:8]}"]
             to_qt += 1
             if looks_converted(r):
                 orphaned += 1
@@ -686,6 +721,9 @@ def build_folder_index(pulled, log):
         f"{to_qt:,} quotes stay QT, {to_so:,} quotes follow their SO")
     for why, n in sorted(how.items(), key=lambda kv: -kv[1]):
         log(f"     quote->SO by {why}: {n:,}")
+    if multi:
+        log(f"   {multi:,} quotes became more than one sales order — their "
+            f"files go into each of those folders")
     if orphaned:
         log(f"   !  {orphaned:,} quotes look converted but carry no id "
             f"linking them to a sales order, so their assets stay under QT. "
@@ -1205,42 +1243,54 @@ def pull_assets(get, cookie, out_dir, pulled, log, stop, pdf_only=True):
             """Returns (manifest rows, complete?, cookie dead?) for one
             transaction. A dead cookie is reported rather than raised, so the
             rows for files that did come down are still written."""
-            folder_name = folders.get((kind, rid)) or f"UNKNOWN-{rid[:8]}"
+            folder_names = folders.get((kind, rid)) or [f"UNKNOWN-{rid[:8]}"]
             rows, complete, auth_dead = [], True, False
             for a in fetch_assets(get, mode, kind, rid):
                 key = a["asset_id"] or a["url"]
-                row = dict(a, parent_kind=kind, parent_id=rid,
-                           folder=folder_name, asset_key=key,
-                           saved_as="", status="", note="")
                 want_pdf = is_pdf(a["name"], a["url"], a["content_type"])
-                if pdf_only and not want_pdf:
-                    if f"{folder_name}|{key}" not in noted:
-                        row["status"] = "skipped"
-                        row["note"] = "not a PDF"
+                # A quote that fed two sales orders belongs in both folders.
+                # Fetch it once, then copy — no second trip for the same file.
+                first_copy = None
+                for folder_name in folder_names:
+                    row = dict(a, parent_kind=kind, parent_id=rid,
+                               folder=folder_name, asset_key=key,
+                               saved_as="", status="", note="")
+                    if pdf_only and not want_pdf:
+                        if f"{folder_name}|{key}" not in noted:
+                            row["status"] = "skipped"
+                            row["note"] = "not a PDF"
+                            rows.append(row)
+                        continue
+                    if f"{folder_name}|{key}" in have:
+                        continue      # on disk already, and in the manifest
+                    folder = os.path.join(root, folder_name)
+                    os.makedirs(folder, exist_ok=True)
+                    dest = unique_path(folder,
+                                       safe_filename(a["name"], want_pdf))
+                    try:
+                        if first_copy and os.path.exists(first_copy):
+                            shutil.copy2(first_copy, dest)
+                            size = os.path.getsize(dest)
+                        else:
+                            size = download_asset(cookie, a["url"], dest,
+                                                  want_pdf)
+                            first_copy = dest
+                        row["status"] = "ok"
+                        row["saved_as"] = os.path.relpath(dest, out_dir)
+                        row["size"] = size or row.get("size", "")
+                    except AuthExpired as e:
+                        row["status"] = "failed"
+                        row["note"] = str(e)[:200]
+                        complete, auth_dead = False, True
                         rows.append(row)
-                    continue
-                if f"{folder_name}|{key}" in have:
-                    continue          # on disk already, and in the manifest
-                folder = os.path.join(root, folder_name)
-                os.makedirs(folder, exist_ok=True)
-                dest = unique_path(folder,
-                                   safe_filename(a["name"], want_pdf))
-                try:
-                    size = download_asset(cookie, a["url"], dest, want_pdf)
-                    row["status"] = "ok"
-                    row["saved_as"] = os.path.relpath(dest, out_dir)
-                    row["size"] = size or row.get("size", "")
-                except AuthExpired as e:
-                    row["status"] = "failed"
-                    row["note"] = str(e)[:200]
-                    complete, auth_dead = False, True
+                        break
+                    except Exception as e:                   # noqa: BLE001
+                        row["status"] = "failed"
+                        row["note"] = str(e)[:200]
+                        complete = False
                     rows.append(row)
+                if auth_dead:
                     break
-                except Exception as e:                       # noqa: BLE001
-                    row["status"] = "failed"
-                    row["note"] = str(e)[:200]
-                    complete = False
-                rows.append(row)
             return rows, complete, auth_dead
 
         saved = skipped = failed = 0
