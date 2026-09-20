@@ -670,7 +670,8 @@ def build_folder_index(pulled, log):
                 ASSET_FOLDER_SO.format(num=num) if num
                 else f"UNKNOWN-INV-{rid[:8]}"]
 
-    to_so = to_qt = orphaned = multi = 0
+    to_so = to_qt = multi = 0
+    orphans = []
     for r in quotes:
         rid = str(r.get("id") or "")
         if not rid:
@@ -714,7 +715,7 @@ def build_folder_index(pulled, log):
                                         else f"UNKNOWN-QT-{rid[:8]}"]
             to_qt += 1
             if looks_converted(r):
-                orphaned += 1
+                orphans.append(qn or rid[:8])
 
     log(f"   folders: {len(so_num_by_id):,} sales orders, "
         f"{len(inv_num_by_id):,} invoices, "
@@ -724,11 +725,14 @@ def build_folder_index(pulled, log):
     if multi:
         log(f"   {multi:,} quotes became more than one sales order — their "
             f"files go into each of those folders")
-    if orphaned:
-        log(f"   !  {orphaned:,} quotes look converted but carry no id "
-            f"linking them to a sales order, so their assets stay under QT. "
-            f"Run shopvox_probe_assets.py on one of them — its CHAIN section "
-            f"names the field we need.")
+    if orphans:
+        log(f"   !  {len(orphans):,} quotes are marked converted but name no "
+            f"sales order, so their files stay under QT:")
+        shown = ", ".join(orphans[:20])
+        log(f"        {shown}{' ...' if len(orphans) > 20 else ''}")
+        log("        Look these up in shopVOX — usually the order was voided "
+            "or deleted, leaving the flag behind. Move the folder by hand if "
+            "one of them does have a live order.")
     return folders
 
 

@@ -97,9 +97,11 @@ def audit(folder, log):
         log("   Nothing can be misfiled. Run the export.")
         return
 
-    pct = 100.0 * len(gap) / max(1, len(conv))
-    log(f"!  {len(gap):,} converted quotes ({pct:.1f}%) do NOT say which "
-        f"sales order they became.")
+    log(f"!  {len(gap):,} of {len(conv):,} converted quotes do NOT say "
+        f"which sales order they became:")
+    log("     " + ", ".join(f"QT{number(q) or q.get('id','?')[:8]}"
+                            for q in gap[:20])
+        + (" ..." if len(gap) > 20 else ""))
     log("   As it stands their files would go under QT, not SO.")
     log("")
 
