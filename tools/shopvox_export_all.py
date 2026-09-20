@@ -86,7 +86,8 @@ LINES_PER_PAGE = 200
 # Per-company detail, for the addresses the list export omits.
 COMPANY_DETAIL_PATHS = ["companies/{id}"]
 
-WORKERS = 6
+WORKERS = 6                 # requests in flight at once; set from the GUI
+WORKERS_MAX = 16            # past this the API starts answering 429
 TIMEOUT = 30
 
 
@@ -1441,6 +1442,10 @@ class App:
         ttk.Label(row4, text="per page:").pack(side="left")
         self.per = tk.StringVar(value="500")
         ttk.Entry(row4, textvariable=self.per, width=6).pack(side="left", padx=4)
+        ttk.Label(row4, text="at once:").pack(side="left", padx=(8, 0))
+        self.workers_var = tk.StringVar(value=str(WORKERS))
+        ttk.Spinbox(row4, from_=1, to=WORKERS_MAX, width=4,
+                    textvariable=self.workers_var).pack(side="left", padx=4)
         self.run_btn = ttk.Button(row4, text="Run export", command=self.start)
         self.run_btn.pack(side="left", padx=10)
         self.stop_btn = ttk.Button(row4, text="Stop", command=self.stop.set,
@@ -1520,6 +1525,7 @@ class App:
         threading.Thread(target=worker, daemon=True).start()
 
     def start(self):
+        global WORKERS
         cookie = self.cookie.get("1.0", "end").strip()
         if not cookie:
             messagebox.showwarning("Cookie needed", "Paste your cookie first.")
@@ -1533,6 +1539,11 @@ class App:
             per = max(1, int(self.per.get()))
         except ValueError:
             per = 500
+        try:
+            WORKERS = max(1, min(WORKERS_MAX, int(self.workers_var.get())))
+        except ValueError:
+            pass
+        self.workers_var.set(str(WORKERS))
 
         self.stop.clear()
         self.log.config(state="normal"); self.log.delete("1.0", "end")
