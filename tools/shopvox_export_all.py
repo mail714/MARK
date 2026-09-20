@@ -291,8 +291,11 @@ def fetch_lines(get, kind, rid):
                     get, f"{base}{sep}page={page}&perPage={LINES_PER_PAGE}")
                 if not isinstance(d, dict):
                     break
-                body = d.get("data") if isinstance(d.get("data"), dict) else d
-                lines = body.get("lineItems") or []
+                # {"workOrder": {...}}, not {"data": {...}} — reading only
+                # the latter found no lineItems and called that a clean run.
+                body = unwrap_detail(d)
+                lines = (body.get("lineItems") or []) if isinstance(
+                    body, dict) else []
                 for i, ln in enumerate(lines):
                     if isinstance(ln, dict):
                         ln = dict(ln)
@@ -300,7 +303,8 @@ def fetch_lines(get, kind, rid):
                         ln["parent_kind"] = kind
                         ln["line_position"] = ln.get("position", i + 1)
                         out.append(ln)
-                meta = body.get("meta") or d.get("meta") or {}
+                meta = ((body.get("meta") if isinstance(body, dict) else None)
+                        or d.get("meta") or {})
                 if not meta.get("hasNextPage"):
                     return out, "ok"
                 page += 1
@@ -460,9 +464,19 @@ def pull_company_addresses(get, out_dir, pulled, log, stop):
 # Folder rule (what the brief asked for):
 #   quote that never became anything   ->  assets/QT 58232/
 #   sales order, or a quote that became one  ->  assets/SO51172/
-#   invoice                            ->  assets/SO<its sales order number>/
-#                                          (falls back to the invoice's own
-#                                          number if no link is on the record)
+#   invoice                            ->  assets/SO<same number>/
+#
+# How shopVOX numbers these, which the rules below depend on:
+#   * quotes run their own sequence          QT62495
+#   * sales orders and invoices SHARE one    SO60008 -> IN60008
+#   * converting a quote to a sales order issues a NEW number
+#     (QT62495 becomes SO60008 — the numbers are unrelated)
+#   * invoicing a sales order keeps the number and swaps the prefix
+#
+# Two consequences. An invoice needs no lookup: its own number IS the sales
+# order number. And a quote can NEVER be matched to its sales order by
+# number — the sequences overlap, so QT60008 and SO60008 are different jobs.
+# That link has to come from an id on one of the records.
 # Change ASSET_FOLDER_QT / ASSET_FOLDER_SO below to restyle those names.
 
 ASSETS_DIRNAME = "assets"
@@ -482,12 +496,21 @@ KIND_ASSETABLE = {"quotes": "Quote", "salesOrders": "WorkOrder",
 # answers with something asset-shaped. The answer is cached in
 # assetsMode.json so later runs skip the probe.
 ASSET_SUBPATHS = [
+    "{kp}/{id}/assets",
     "transactions/{kp}/{id}/assets",
     "transactions/{kp}/{id}/attachments",
-    "{kp}/{id}/assets",
+    # These LOOK like they work and do not: /edge/assets ignores the filter
+    # and hands back the first page of every asset in the account, so each
+    # transaction appears to have the same ten files. They stay in the list
+    # only because endpoint_filters() below now catches that; never promote
+    # one above the per-transaction collections.
     "assets?assetableType={at}&assetableId={id}",
     "assets?assetable_type={at}&assetable_id={id}",
 ]
+
+# An id that cannot exist. If an endpoint returns assets for THIS, it is not
+# filtering by id at all and anything it returns is the wrong transaction's.
+BOGUS_ID = "00000000-0000-0000-0000-000000000000"
 ASSET_SAMPLES = 40          # transactions read during discovery
 DOWNLOAD_TIMEOUT = 180      # seconds per file — proofs can be fat
 
@@ -574,19 +597,18 @@ def build_folder_index(pulled, log):
         rid, num = str(r.get("id") or ""), txn_number(r)
         if rid and num:
             so_num_by_id[rid] = num
-    so_numbers = set(so_num_by_id.values())
 
-    # Invoice -> the sales order it belongs to.
-    inv_num_by_id, inv_own = {}, 0
+    # An invoice shares its sales order's number, so its own number is the
+    # answer. Links are only a fallback for a record with no number on it.
+    inv_num_by_id = {}
     for r in invoices:
         rid = str(r.get("id") or "")
         if not rid:
             continue
-        num = so_num_by_id.get(ref_id(r, SO_REF_KEYS, SO_OBJ_KEYS) or "")
-        num = num or ref_number(r, SO_OBJ_KEYS) or so_num_by_id.get(rid)
-        if not num:
-            num = txn_number(r)
-            inv_own += 1 if num else 0
+        num = (txn_number(r)
+               or so_num_by_id.get(ref_id(r, SO_REF_KEYS, SO_OBJ_KEYS) or "")
+               or ref_number(r, SO_OBJ_KEYS)
+               or so_num_by_id.get(rid))
         if num:
             inv_num_by_id[rid] = num
 
@@ -638,10 +660,9 @@ def build_folder_index(pulled, log):
                     num, why = embedded, "sales order embedded on the quote"
             if not num and rid in so_num_by_quote:
                 num, why = so_num_by_quote[rid], "link back from the order"
-            if not num:
-                qn = txn_number(r)
-                if qn and qn in so_numbers:
-                    num, why = qn, "same number as a sales order"
+            # Deliberately NOT matched by number: a quote's number comes from
+            # a different sequence than a sales order's, so equal numbers
+            # mean two unrelated jobs, not a conversion.
         if num:
             folders[("quotes", rid)] = ASSET_FOLDER_SO.format(num=num)
             to_so += 1
@@ -659,13 +680,11 @@ def build_folder_index(pulled, log):
         f"{to_qt:,} quotes stay QT, {to_so:,} quotes follow their SO")
     for why, n in sorted(how.items(), key=lambda kv: -kv[1]):
         log(f"     quote->SO by {why}: {n:,}")
-    if inv_own:
-        log(f"   !  {inv_own:,} invoices carry no link to a sales order — "
-            f"filed under SO + their own number")
     if orphaned:
-        log(f"   !  {orphaned:,} quotes look converted but link to nothing — "
-            f"filed under QT. Send me one such quote's JSON and I'll wire "
-            f"the field up.")
+        log(f"   !  {orphaned:,} quotes look converted but carry no id "
+            f"linking them to a sales order, so their assets stay under QT. "
+            f"Run shopvox_probe_assets.py on one of them — its CHAIN section "
+            f"names the field we need.")
     return folders
 
 
@@ -804,16 +823,49 @@ def collect_assets(payload):
 
 # --- fetching ---------------------------------------------------------------
 
+# The detail call answers {"workOrder": {...}} / {"quote": {...}} rather than
+# the {"data": {...}} the rest of the API uses.
+DETAIL_WRAPPERS = ("data", "workOrder", "quote", "invoice", "salesOrder",
+                   "transaction")
+
+
+def unwrap_detail(d):
+    if isinstance(d, dict) and len(d) == 1:
+        for k in DETAIL_WRAPPERS:
+            if isinstance(d.get(k), dict):
+                return d[k]
+    if isinstance(d, dict) and isinstance(d.get("data"), dict):
+        return d["data"]
+    return d
+
+
 def fetch_detail(get, kind, rid):
     for tpl in DETAIL_PATHS_BY_KIND.get(kind, []):
         d = get_with_retry(get, tpl.format(id=rid))
         if isinstance(d, dict):
             if d.get("status") == 404:
                 continue              # this API wraps 404 in a 200
-            return d.get("data") if isinstance(d.get("data"), dict) else d
+            return unwrap_detail(d)
         if isinstance(d, list):
             return d
     return None
+
+
+def endpoint_filters(get, tpl, kind):
+    """Does this endpoint actually filter by transaction id?
+
+    Asking for an id that cannot exist must come back empty. If assets come
+    back anyway, the endpoint is serving the whole account and every folder
+    would get the same files — so it is rejected outright."""
+    path = tpl.format(kp=KIND_PATH[kind], at=KIND_ASSETABLE[kind],
+                      id=BOGUS_ID)
+    try:
+        d = get_with_retry(get, path, tries=1)
+    except Exception:                                        # noqa: BLE001
+        return True                   # 404 on a bogus id is correct behaviour
+    if isinstance(d, dict) and d.get("status") == 404:
+        return True
+    return not collect_assets(d if isinstance(d, (dict, list)) else {})
 
 
 def fetch_assets(get, mode, kind, rid):
@@ -891,20 +943,27 @@ def discover_asset_mode(get, out_dir, pulled, log, stop):
     else:
         mode = None
         for tpl in ASSET_SUBPATHS:
-            found = 0
+            found, kinds_tried = 0, set()
             for kind, rid in probes[:10]:
                 if stop.is_set():
                     break
                 try:
                     found += len(fetch_assets(get, tpl, kind, rid))
+                    kinds_tried.add(kind)
                 except AuthExpired:
                     raise
                 except Exception:
                     break
-            if found:
-                log(f"   assets live at /edge/{tpl} ({found} in the sample)")
-                mode = tpl
-                break
+            if not found:
+                continue
+            if not all(endpoint_filters(get, tpl, k) for k in kinds_tried):
+                log(f"   !  /edge/{tpl} answers, but returns the same files "
+                    f"for an id that does not exist — it is not filtering by "
+                    f"transaction. Ignoring it.")
+                continue
+            log(f"   assets live at /edge/{tpl} ({found} in the sample)")
+            mode = tpl
+            break
         if not mode:
             log("!  No assets found in the sample, by any route. Carrying on "
                 "with the detail payload in case the sample was just thin.")

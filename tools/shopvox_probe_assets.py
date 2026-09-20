@@ -119,6 +119,8 @@ KIND_PATH = {"quotes": "quotes", "salesOrders": "work_orders",
 KIND_ASSETABLE = {"quotes": "Quote", "salesOrders": "WorkOrder",
                   "invoices": "Invoice"}
 
+BOGUS_ID = "00000000-0000-0000-0000-000000000000"
+
 NUMBER_KEYS = ("txnNumber", "transactionNumber", "number", "quoteNumber",
                "salesOrderNumber", "workOrderNumber", "invoiceNumber",
                "orderNumber", "docNumber", "name", "title")
@@ -267,16 +269,44 @@ def collect_assets(payload):
     walk(payload, "", 0, root=True)
     return found
 
+DETAIL_WRAPPERS = ("data", "workOrder", "quote", "invoice", "salesOrder",
+                   "transaction")
+
+def unwrap_detail(d):
+    if isinstance(d, dict) and len(d) == 1:
+        for k in DETAIL_WRAPPERS:
+            if isinstance(d.get(k), dict):
+                return d[k]
+    if isinstance(d, dict) and isinstance(d.get("data"), dict):
+        return d["data"]
+    return d
+
 def fetch_detail(get, kind, rid):
     for tpl in DETAIL_PATHS_BY_KIND.get(kind, []):
         d = get_with_retry(get, tpl.format(id=rid))
         if isinstance(d, dict):
             if d.get("status") == 404:
                 continue              # this API wraps 404 in a 200
-            return d.get("data") if isinstance(d.get("data"), dict) else d
+            return unwrap_detail(d)
         if isinstance(d, list):
             return d
     return None
+
+def endpoint_filters(get, tpl, kind):
+    """Does this endpoint actually filter by transaction id?
+
+    Asking for an id that cannot exist must come back empty. If assets come
+    back anyway, the endpoint is serving the whole account and every folder
+    would get the same files — so it is rejected outright."""
+    path = tpl.format(kp=KIND_PATH[kind], at=KIND_ASSETABLE[kind],
+                      id=BOGUS_ID)
+    try:
+        d = get_with_retry(get, path, tries=1)
+    except Exception:                                        # noqa: BLE001
+        return True                   # 404 on a bogus id is correct behaviour
+    if isinstance(d, dict) and d.get("status") == 404:
+        return True
+    return not collect_assets(d if isinstance(d, (dict, list)) else {})
 
 # ---------------------------------------------------------------------------
 # The probe itself
@@ -291,6 +321,9 @@ PROBE_PATHS = [
     "transactions/{kp}/{id}/documents",
     "transactions/{kp}/{id}/proofs",
     "{kp}/{id}/assets",
+    "{kp}/{id}/assets?page=1&perPage=200",
+    "{kp}/{id}/attachments",
+    "{kp}/{id}/files",
     "assets?assetableType={at}&assetableId={id}",
     "assets?assetable_type={at}&assetable_id={id}",
     "assets?transactionId={id}",
@@ -394,6 +427,95 @@ def find_transaction(get, folder, wanted, log):
     return None, None, None
 
 
+
+# Fields that might carry the quote -> sales order -> invoice chain. Numbers
+# cannot be used for it (quotes run a separate sequence), so the link has to
+# be an id on one of the records, and this finds what it is called.
+LINK_KEY_RE = re.compile(
+    r"(quote|order|invoice|txn|transaction|parent|source|convert|original)",
+    re.I)
+UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-"
+                     r"[0-9a-f]{4}-[0-9a-f]{12}$", re.I)
+
+
+def load_index(folder):
+    """{id: (kind, number)} from the .json files of a previous export."""
+    idx = {}
+    for kind in ("quotes", "salesOrders", "invoices"):
+        path = os.path.join(folder, f"{kind}.json")
+        if not os.path.exists(path):
+            continue
+        try:
+            with open(path, encoding="utf-8") as f:
+                rows = json.load(f)
+        except Exception:
+            continue
+        for r in rows:
+            if isinstance(r, dict) and r.get("id"):
+                idx[str(r["id"])] = (kind, txn_number(r))
+    return idx
+
+
+def chain_report(folder, rid, rec, body, log):
+    """Which field ties this transaction to its quote / order / invoice."""
+    idx = load_index(folder)
+    if idx:
+        log(f"   ({len(idx):,} transactions in this folder's .json files to "
+            f"resolve ids against)")
+    else:
+        log("   (no .json files here, so ids can't be named — run the main "
+            "exporter into this folder first to get more out of this)")
+    hits = 0
+    for source, obj in (("list", rec), ("detail", body)):
+        if not isinstance(obj, dict):
+            continue
+        for k, v in obj.items():
+            if not LINK_KEY_RE.search(k):
+                continue
+            if isinstance(v, dict):
+                vid = str(v.get("id") or "")
+                shown = f"{{id={vid or '-'}, number={txn_number(v) or '-'}}}"
+            elif isinstance(v, (str, int)) and str(v).strip():
+                vid = str(v).strip()
+                # Ids and numbers only — never free text, which may be notes.
+                shown = vid if (UUID_RE.match(vid) or vid.isdigit()
+                                or len(vid) <= 24) else f"<str len={len(vid)}>"
+            else:
+                continue
+            note = ""
+            if vid == rid:
+                note = "   <-- this transaction itself"
+            elif vid in idx:
+                kind2, num2 = idx[vid]
+                note = f"   <-- that is {num2} ({kind2})"
+            log(f"   {source:>6}  {k} = {shown}{note}")
+            hits += 1
+    if not hits:
+        log("   -  nothing on this record references another transaction")
+        log("      If this is a quote that DID become a sales order, that is "
+            "the problem — tell me and I'll look at the full dump.")
+
+
+def summarise(d):
+    """What came back, in one line — shapes and counts, no values."""
+    if isinstance(d, list):
+        return f"list of {len(d)}"
+    if not isinstance(d, dict):
+        return type(d).__name__
+    bits = []
+    for k, v in list(d.items())[:8]:
+        if isinstance(v, list):
+            bits.append(f"{k}[{len(v)}]")
+        elif isinstance(v, dict):
+            if k == "meta":
+                bits.append(f"meta.totalCount={v.get('totalCount')}")
+            else:
+                bits.append(k + "{}")
+        else:
+            bits.append(k)
+    return ", ".join(bits)
+
+
 def probe(cookie, folder, wanted, log):
     get = make_get(cookie)
     log(f">  looking for {wanted}")
@@ -404,10 +526,16 @@ def probe(cookie, folder, wanted, log):
         return
     log(f"   {kind}  id={rid}  number={txn_number(rec)}")
 
+    # 0. the quote -> sales order -> invoice chain
+    log("")
+    log(">  0. how this transaction links to its quote / order / invoice")
+    chain_pre = fetch_detail(get, kind, rid)
+    chain_report(folder, rid, rec, chain_pre, log)
+
     # 1. does it ride along in the detail payload?
     log("")
     log(">  1. the detail payload (the call the exporter already makes)")
-    body = fetch_detail(get, kind, rid)
+    body = chain_pre
     detail_hits = []
     if not body:
         log("   X  no detail payload came back")
@@ -422,14 +550,13 @@ def probe(cookie, folder, wanted, log):
             top = (", ".join(sorted(body.keys())[:24])
                    if isinstance(body, dict) else "?")
             log("   -  nothing asset-shaped in it")
-            log(f"      its top-level fields: {top}")
+            log(f"      its fields: {top}")
 
-    # 2. the sub-endpoints
+    # 2. the candidate endpoints, each checked against a control
     log("")
     log(">  2. the candidate endpoints")
-    kp = KIND_PATH[kind]
-    at = KIND_ASSETABLE[kind]
-    winners, raw = [], {}
+    kp, at = KIND_PATH[kind], KIND_ASSETABLE[kind]
+    raw, good, unfiltered, empty = {}, [], [], []
     for tpl in PROBE_PATHS:
         path = tpl.format(kp=kp, at=at, id=rid)
         try:
@@ -445,33 +572,57 @@ def probe(cookie, folder, wanted, log):
         if isinstance(d, dict) and d.get("status") == 404:
             log(f"   404  /edge/{path}  (wrapped in a 200)")
             continue
-        found = collect_assets(d if isinstance(d, (dict, list)) else {})
         raw[path] = d
-        if found:
-            log(f"   OK   /edge/{path}  -> {len(found)} asset(s)")
-            for a in found:
-                log(f"          {a['name']}  [{a['content_type'] or '?'}]")
-            winners.append(tpl)          # the template, not this one id
+        found = collect_assets(d if isinstance(d, (dict, list)) else {})
+        if not found:
+            log(f"   200  /edge/{path}")
+            log(f"        nothing asset-shaped — {summarise(d)}")
+            if isinstance(d, dict) and any(
+                    isinstance(v, list) for k, v in d.items() if k != "meta"):
+                empty.append(tpl)
+            continue
+        # It answered with assets. Does it actually filter by transaction?
+        filters = endpoint_filters(get, tpl, kind)
+        mark = "OK  " if filters else "TRAP"
+        log(f"   {mark} /edge/{path}  -> {len(found)} asset(s), "
+            f"{summarise(d)}")
+        for a in found[:6]:
+            log(f"          {a['name']}  [{a['content_type'] or '?'}]")
+        if len(found) > 6:
+            log(f"          ...and {len(found) - 6} more")
+        if filters:
+            good.append(tpl)
         else:
-            shape = (", ".join(sorted(d.keys())[:12])
-                     if isinstance(d, dict) else f"list of {len(d)}")
-            log(f"   200  /edge/{path}  but nothing asset-shaped ({shape})")
+            unfiltered.append(tpl)
+            log("        ^ IGNORE THIS ONE. It returns the same files for an "
+                "id that does not exist, so it is serving the whole account, "
+                "not this transaction.")
 
-    # 3. the verdict, and the two files
+    # 3. the verdict
     log("")
     if detail_hits:
         log("=> The attachments ride along in the detail payload. The "
             "exporter's default setting is already right.")
-    elif winners:
-        log(f"=> Use this one: {winners[0]}")
-        log("   Put it at the top of ASSET_SUBPATHS in "
-            "shopvox_export_all.py, or just delete assetsMode.json and "
-            "re-run — discovery will find it now.")
+    elif good:
+        log(f"=> Use this one: {good[0]}")
+        log("   It returns assets for this transaction and nothing for an id "
+            "that does not exist, which is what we want.")
+        log("   Delete assetsMode.json and re-run the exporter — discovery "
+            "will find it now.")
     else:
-        log("=> Nothing found anywhere. Two possibilities: this transaction "
-            "genuinely has no attachments (try another one you can SEE a PDF "
-            "on in shopVOX), or they're somewhere none of these paths reach.")
-        log("   Send me the STRUCTURE file either way.")
+        if unfiltered:
+            log(f"!  {len(unfiltered)} endpoint(s) answered but are NOT "
+                f"filtering by transaction — they serve the whole account. "
+                f"Unusable, ignore them: {unfiltered}")
+        if empty:
+            log(f"=> {empty[0]} exists and has the right shape, but is EMPTY "
+                f"for this transaction.")
+            log("   That almost certainly means this transaction has no "
+                "attachments on it. Open it in shopVOX, find one with a PDF "
+                "you can SEE on the Assets tab, and probe that number "
+                "instead.")
+        else:
+            log("=> Nothing usable found. Send me the STRUCTURE file.")
 
     base = os.path.join(folder, f"asset-probe-{core_number(wanted) or 'txn'}")
     dump = {"kind": kind, "id": rid, "detail": body, "endpoints": raw}
@@ -482,8 +633,9 @@ def probe(cookie, folder, wanted, log):
         f.write("No names, addresses, prices or file names are in this file.\n")
         f.write(f"transaction kind: {kind}\n")
         f.write(f"assets found in the detail payload: {len(detail_hits)}\n")
-        f.write("endpoint templates that answered with assets: "
-                f"{winners or 'none'}\n\n")
+        f.write(f"endpoints that filter properly: {good or 'none'}\n")
+        f.write(f"endpoints that ignore the filter: {unfiltered or 'none'}\n")
+        f.write(f"endpoints with the right shape but empty: {empty or 'none'}\n\n")
         f.write("=== detail payload ===\n")
         f.write(json.dumps(skeleton(body), indent=2))
         f.write("\n\n=== endpoints that returned something ===\n")
